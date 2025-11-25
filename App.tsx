@@ -10,7 +10,7 @@ const App: React.FC = () => {
 
   const handleLogin = (user: User) => {
     setCurrentUser(user);
-    setCurrentView(ViewState.USER_DASHBOARD);
+    setCurrentView(user.role === 'admin' ? ViewState.ADMIN_DASHBOARD : ViewState.USER_DASHBOARD);
   };
 
   const handleLogout = () => {

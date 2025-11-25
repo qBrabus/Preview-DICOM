@@ -6,12 +6,69 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from . import models, schemas
-from .database import Base, engine, get_db
+from .database import Base, engine, get_db, SessionLocal
 
 app = FastAPI(title="Preview DICOM Platform", version="0.1.0")
 
-# Initialize database tables
+# Initialize database tables and seed minimal data
 Base.metadata.create_all(bind=engine)
+
+
+def seed_initial_data():
+    """
+    Ensure the platform has a default administrator account and a test patient
+    so the application never falls back to hard-coded demo data.
+    """
+
+    db = SessionLocal()
+    try:
+        admin_group = db.query(models.Group).filter(models.Group.name == "Administrateurs").first()
+        if not admin_group:
+            admin_group = models.Group(
+                name="Administrateurs",
+                description="Accès complet au système",
+                can_edit_patients=True,
+                can_export_data=True,
+                can_manage_users=True,
+                can_view_images=True,
+            )
+            db.add(admin_group)
+            db.commit()
+            db.refresh(admin_group)
+
+        admin_user = db.query(models.User).filter(models.User.email == "admin@imagine.fr").first()
+        if not admin_user:
+            hashed = hashlib.sha256("Admin123!".encode()).hexdigest()
+            admin_user = models.User(
+                email="admin@imagine.fr",
+                full_name="Administrateur",
+                hashed_password=hashed,
+                role="admin",
+                status="active",
+                group_id=admin_group.id,
+            )
+            db.add(admin_user)
+
+        test_patient = db.query(models.Patient).filter(models.Patient.external_id == "patient_test_poc").first()
+        if not test_patient:
+            test_patient = models.Patient(
+                external_id="patient_test_poc",
+                first_name="Patient",
+                last_name="POC",
+                condition="Suivi clinique",
+                date_of_birth="2000-01-01",
+                last_visit="2024-01-01",
+                dicom_study_uid=None,
+                orthanc_patient_id=None,
+            )
+            db.add(test_patient)
+
+        db.commit()
+    finally:
+        db.close()
+
+
+seed_initial_data()
 
 # CORS for local dev and Docker overlay
 app.add_middleware(
@@ -26,6 +83,19 @@ app.add_middleware(
 @app.get("/health", tags=["system"])
 def health_check():
     return {"status": "ok"}
+
+
+@app.post("/auth/login", response_model=schemas.UserRead, tags=["auth"])
+def login(credentials: schemas.LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == credentials.email).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Identifiants invalides")
+
+    hashed = hashlib.sha256(credentials.password.encode()).hexdigest()
+    if hashed != user.hashed_password:
+        raise HTTPException(status_code=401, detail="Identifiants invalides")
+
+    return user
 
 
 @app.post("/groups", response_model=schemas.GroupRead, tags=["groups"])

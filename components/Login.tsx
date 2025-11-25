@@ -3,6 +3,8 @@ import { Logo } from './Logo';
 import { User, ViewState } from '../types';
 import { X, Send, Mail } from 'lucide-react';
 
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+
 interface LoginProps {
   onLogin: (user: User) => void;
   onNavigate: (view: ViewState) => void;
@@ -22,19 +24,42 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     reason: ''
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username || !password) {
       setError('Veuillez remplir tous les champs');
       return;
     }
 
-    // Mock authentication logic
-    if (username === 'admin' && password === 'admin') {
-      onLogin({ id: 'u1', username: 'admin', role: 'admin', name: 'Dr. Administrateur' });
-    } else {
-      // Default to user role for any other non-empty credentials
-      onLogin({ id: 'u2', username: 'user', role: 'user', name: 'Dr. Martin' });
+    try {
+      const response = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email: username, password })
+      });
+
+      if (!response.ok) {
+        setError('Identifiants invalides');
+        return;
+      }
+
+      const data = await response.json();
+
+      const authenticatedUser: User = {
+        id: data.id?.toString() || data.email,
+        username: data.email,
+        role: data.role === 'admin' ? 'admin' : 'user',
+        name: data.full_name,
+        email: data.email,
+        status: data.status
+      };
+
+      onLogin(authenticatedUser);
+    } catch (err) {
+      console.error(err);
+      setError('Impossible de contacter le serveur.');
     }
   };
 
