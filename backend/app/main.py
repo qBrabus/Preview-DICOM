@@ -1,16 +1,34 @@
 import hashlib
+import time
 from typing import List
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
+from sqlalchemy import text
 
 from . import models, schemas
 from .database import Base, engine, get_db, SessionLocal
 
 app = FastAPI(title="Preview DICOM Platform", version="0.1.0")
 
+def wait_for_db(max_attempts: int = 10, delay_seconds: int = 2) -> None:
+    """Wait for the database to accept connections before continuing startup."""
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            return
+        except OperationalError:
+            if attempt == max_attempts:
+                raise
+            time.sleep(delay_seconds)
+
+
 # Initialize database tables and seed minimal data
+wait_for_db()
 Base.metadata.create_all(bind=engine)
 
 
