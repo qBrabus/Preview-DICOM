@@ -4,6 +4,7 @@ export interface MedicalImage {
   url: string;
   description: string;
   date: string;
+  file?: File | null;
 }
 
 export interface Patient {
