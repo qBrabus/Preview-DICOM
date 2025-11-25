@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Users,
   ChevronRight, 
@@ -37,6 +37,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   
   // Search & Filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -47,6 +48,14 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
   // Edit Mode State
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<Patient | null>(null);
+
+  useEffect(() => {
+    if (fileInputRef.current) {
+      fileInputRef.current.setAttribute('webkitdirectory', 'true');
+      fileInputRef.current.setAttribute('directory', 'true');
+      fileInputRef.current.setAttribute('multiple', 'true');
+    }
+  }, []);
 
   // Derived state for searching
   const filteredPatients = patients.filter(p => 
@@ -97,6 +106,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
     // Reset edit mode when changing patient
     setIsEditing(false);
     setEditForm(null);
+    setCurrentImageIndex(0);
   }, [selectedPatientId]);
 
   // -- Handlers --
@@ -158,40 +168,68 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
 
   // Import Logic
   const handleImportClick = () => {
-    document.getElementById('file-upload')?.click();
+    fileInputRef.current?.click();
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileReader = new FileReader();
-    if (e.target.files && e.target.files.length > 0) {
-      fileReader.readAsText(e.target.files[0], "UTF-8");
-      fileReader.onload = (event) => {
-        try {
-          if (event.target?.result) {
-            const json = JSON.parse(event.target.result as string);
-            // Handle both single object or array of objects
-            const importedPatients: Patient[] = Array.isArray(json) ? json : [json];
-            
-            // Check for duplicates or invalid structure (basic check)
-            const validNewPatients = importedPatients.filter(np => np.id && np.lastName);
-            
-            // Filter out IDs that already exist to avoid collision (or update them - here we avoid collision by appending timestamp if needed, but for simplicity we just merge)
-            // Real app would confirm overwrite.
-            const currentIds = new Set(patients.map(p => p.id));
-            const uniqueNewPatients = validNewPatients.filter(p => !currentIds.has(p.id));
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
 
-            if (uniqueNewPatients.length > 0) {
-                setPatients([...patients, ...uniqueNewPatients]);
-                alert(`${uniqueNewPatients.length} patient(s) importé(s) avec succès (Images incluses dans les métadonnées).`);
-            } else {
-                alert("Aucun nouveau patient importé (les IDs existent déjà ou fichier invalide).");
-            }
-          }
-        } catch (err) {
-            alert("Erreur lors de la lecture du fichier JSON.");
-        }
-      };
+    const groupedFiles: Record<string, { jsonFile?: File; dicomFiles: File[] }> = {};
+    Array.from(e.target.files).forEach((file) => {
+      const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+      const [folderName] = relativePath.split('/');
+      if (!groupedFiles[folderName]) {
+        groupedFiles[folderName] = { dicomFiles: [] };
+      }
+      if (file.name.toLowerCase().endsWith('.json')) {
+        groupedFiles[folderName].jsonFile = file;
+      } else if (file.name.toLowerCase().endsWith('.dcm')) {
+        groupedFiles[folderName].dicomFiles.push(file);
+      }
+    });
+
+    const currentIds = new Set(patients.map((p) => p.id));
+    const importedPatients: Patient[] = [];
+
+    for (const folder of Object.keys(groupedFiles)) {
+      const { jsonFile, dicomFiles } = groupedFiles[folder];
+      if (!jsonFile) continue;
+
+      try {
+        const content = await jsonFile.text();
+        const parsed = JSON.parse(content);
+        const parsedPatients: Patient[] = Array.isArray(parsed) ? parsed : [parsed];
+
+        parsedPatients.forEach((patientData) => {
+          if (!patientData.id || !patientData.lastName) return;
+          if (currentIds.has(patientData.id)) return;
+
+          const dicomImages = dicomFiles.map((file) => ({
+            id: file.name,
+            url: URL.createObjectURL(file),
+            description: 'Image DICOM importée',
+            date: new Date().toISOString().split('T')[0],
+          }));
+
+          importedPatients.push({
+            ...patientData,
+            images: dicomImages.length > 0 ? dicomImages : patientData.images || [],
+          });
+          currentIds.add(patientData.id);
+        });
+      } catch (err) {
+        console.error(`Erreur lors de la lecture du dossier ${folder}`, err);
+      }
     }
+
+    if (importedPatients.length > 0) {
+      setPatients([...patients, ...importedPatients]);
+      alert(`${importedPatients.length} patient(s) importé(s) avec succès depuis ${Object.keys(groupedFiles).length} dossier(s).`);
+    } else {
+      alert('Aucun nouveau patient importé. Vérifiez les dossiers ou les IDs existants.');
+    }
+
+    e.target.value = '';
   };
 
   // Delete Logic
@@ -239,6 +277,13 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
       setEditForm({ ...editForm, [field]: value });
     }
   };
+
+  useEffect(() => {
+    if (!selectedPatient) return;
+    if (currentImageIndex >= selectedPatient.images.length) {
+      setCurrentImageIndex(0);
+    }
+  }, [selectedPatient, currentImageIndex]);
 
   return (
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden">
@@ -370,7 +415,14 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
                 </div>
 
                 <div className="flex gap-2">
-                    <input type="file" id="file-upload" className="hidden" multiple onChange={handleFileChange} accept=".json" />
+                    <input
+                      type="file"
+                      id="file-upload"
+                      className="hidden"
+                      ref={fileInputRef}
+                      onChange={handleFileChange}
+                      accept=".json,.dcm"
+                    />
                     <button 
                         onClick={handleImportClick}
                         className="flex-1 flex items-center justify-center gap-2 p-2 bg-white border border-slate-200 rounded-lg hover:border-indigo-500 hover:text-indigo-600 transition-all shadow-sm group"
@@ -501,45 +553,103 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
                     )}
                     </div>
 
-                    <div className="flex-1 bg-slate-900 relative flex items-center justify-center overflow-hidden group">
-                    {selectedPatient.images.length > 0 ? (
+                    <div className="flex-1 bg-slate-900 relative flex flex-col overflow-hidden group">
+                      {selectedPatient.images.length > 0 ? (
                         <>
-                        <img 
-                            src={selectedPatient.images[currentImageIndex].url} 
-                            alt={selectedPatient.images[currentImageIndex].description}
-                            className="max-h-full max-w-full object-contain"
-                        />
-                        
-                        {/* Overlay Info */}
-                        <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-4 text-white transform translate-y-full group-hover:translate-y-0 transition-transform duration-300">
-                            <p className="font-medium">{selectedPatient.images[currentImageIndex].description}</p>
-                            <p className="text-xs text-slate-300">{selectedPatient.images[currentImageIndex].date}</p>
-                        </div>
+                          <div className="relative flex-1 w-full h-full overflow-hidden">
+                            <div
+                              className="absolute inset-0 flex transition-transform duration-500"
+                              style={{ transform: `translateX(-${currentImageIndex * 100}%)` }}
+                            >
+                              {selectedPatient.images.map((image, index) => (
+                                <div
+                                  key={image.id || index}
+                                  className="min-w-full h-full flex items-center justify-center p-6"
+                                >
+                                  <div className="w-full h-full bg-slate-800 rounded-lg border border-slate-700 flex flex-col items-center justify-center overflow-hidden">
+                                    <object
+                                      data={image.url}
+                                      type="application/dicom"
+                                      className="w-full h-full"
+                                    >
+                                      <div className="flex flex-col items-center text-slate-100 p-6 gap-3">
+                                        <FileImage size={40} className="opacity-70" />
+                                        <p className="text-sm font-semibold text-center">{image.id}</p>
+                                        <p className="text-xs text-slate-300 text-center max-w-xs">
+                                          Aperçu non disponible. Cliquez ci-dessous pour ouvrir l'image DICOM dans un nouvel onglet.
+                                        </p>
+                                        <a
+                                          href={image.url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 rounded text-xs font-medium text-white"
+                                        >
+                                          Ouvrir l'image
+                                        </a>
+                                      </div>
+                                    </object>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
 
-                        {/* Controls */}
-                        {selectedPatient.images.length > 1 && (
+                          {/* Overlay Info */}
+                          <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-4 text-white flex items-center justify-between">
+                            <div>
+                              <p className="font-medium">{selectedPatient.images[currentImageIndex].description}</p>
+                              <p className="text-xs text-slate-300">{selectedPatient.images[currentImageIndex].date}</p>
+                            </div>
+                            <span className="text-xs bg-white/10 px-3 py-1 rounded-full">
+                              {currentImageIndex + 1} / {selectedPatient.images.length}
+                            </span>
+                          </div>
+
+                          {/* Controls */}
+                          {selectedPatient.images.length > 1 && (
                             <>
-                            <button 
+                              <button
                                 onClick={handlePrevImage}
                                 className="absolute left-4 top-1/2 -translate-y-1/2 p-2 bg-white/10 hover:bg-white/30 text-white rounded-full backdrop-blur-md transition-all"
-                            >
+                                aria-label="Image précédente"
+                              >
                                 <ChevronLeft size={24} />
-                            </button>
-                            <button 
+                              </button>
+                              <button
                                 onClick={handleNextImage}
                                 className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-white/10 hover:bg-white/30 text-white rounded-full backdrop-blur-md transition-all"
-                            >
+                                aria-label="Image suivante"
+                              >
                                 <ChevronRight size={24} />
-                            </button>
+                              </button>
                             </>
-                        )}
+                          )}
+
+                          {/* Thumbnail rail */}
+                          {selectedPatient.images.length > 1 && (
+                            <div className="bg-slate-800 border-t border-slate-700 px-3 py-2 flex items-center gap-2 overflow-x-auto">
+                              {selectedPatient.images.map((image, index) => (
+                                <button
+                                  key={`thumb-${image.id || index}`}
+                                  onClick={() => setCurrentImageIndex(index)}
+                                  className={`px-3 py-2 rounded-md text-xs font-medium border transition-all whitespace-nowrap ${
+                                    index === currentImageIndex
+                                      ? 'bg-indigo-600 text-white border-indigo-500'
+                                      : 'bg-slate-700 text-slate-200 border-slate-600 hover:bg-slate-600'
+                                  }`}
+                                >
+                                  {image.id || `Image ${index + 1}`}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </>
-                    ) : (
-                        <div className="text-slate-500 flex flex-col items-center">
-                        <FileImage size={48} className="mb-4 opacity-50" />
-                        <p>Aucune image disponible pour ce patient.</p>
+                      ) : (
+                        <div className="text-slate-500 flex flex-col items-center justify-center flex-1">
+                          <FileImage size={48} className="mb-4 opacity-50" />
+                          <p>Aucune image disponible pour ce patient.</p>
                         </div>
-                    )}
+                      )}
                     </div>
                 </div>
             </>
