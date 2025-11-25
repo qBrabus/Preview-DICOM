@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { Logo } from './Logo';
 import { User, Patient, ViewState } from '../types';
+import { DicomViewer } from './DicomViewer';
 
 const API_BASE =
   import.meta.env.VITE_API_URL ||
@@ -53,7 +54,8 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
     if (fileInputRef.current) {
       fileInputRef.current.setAttribute('webkitdirectory', 'true');
       fileInputRef.current.setAttribute('directory', 'true');
-      fileInputRef.current.setAttribute('multiple', 'true');
+      fileInputRef.current.setAttribute('mozdirectory', 'true');
+      fileInputRef.current.multiple = true;
     }
   }, []);
 
@@ -209,6 +211,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
             url: URL.createObjectURL(file),
             description: 'Image DICOM importée',
             date: new Date().toISOString().split('T')[0],
+            file,
           }));
 
           importedPatients.push({
@@ -421,6 +424,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
                       className="hidden"
                       ref={fileInputRef}
                       onChange={handleFileChange}
+                      multiple
                       accept=".json,.dcm"
                     />
                     <button 
@@ -567,27 +571,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
                                   className="min-w-full h-full flex items-center justify-center p-6"
                                 >
                                   <div className="w-full h-full bg-slate-800 rounded-lg border border-slate-700 flex flex-col items-center justify-center overflow-hidden">
-                                    <object
-                                      data={image.url}
-                                      type="application/dicom"
-                                      className="w-full h-full"
-                                    >
-                                      <div className="flex flex-col items-center text-slate-100 p-6 gap-3">
-                                        <FileImage size={40} className="opacity-70" />
-                                        <p className="text-sm font-semibold text-center">{image.id}</p>
-                                        <p className="text-xs text-slate-300 text-center max-w-xs">
-                                          Aperçu non disponible. Cliquez ci-dessous pour ouvrir l'image DICOM dans un nouvel onglet.
-                                        </p>
-                                        <a
-                                          href={image.url}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 rounded text-xs font-medium text-white"
-                                        >
-                                          Ouvrir l'image
-                                        </a>
-                                      </div>
-                                    </object>
+                                    <DicomViewer image={image} />
                                   </div>
                                 </div>
                               ))}
