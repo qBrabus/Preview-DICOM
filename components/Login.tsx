@@ -3,7 +3,10 @@ import { Logo } from './Logo';
 import { User, ViewState } from '../types';
 import { X, Send, Mail } from 'lucide-react';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const API_BASE =
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.VITE_API_BASE ||
+  '/api';
 
 interface LoginProps {
   onLogin: (user: User) => void;
