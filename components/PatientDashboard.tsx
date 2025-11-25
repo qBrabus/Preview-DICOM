@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Users, 
+import {
+  Users,
   ChevronRight, 
   Edit, 
   Download, 
@@ -19,7 +19,8 @@ import {
 } from 'lucide-react';
 import { Logo } from './Logo';
 import { User, Patient, ViewState } from '../types';
-import { MOCK_PATIENTS } from '../constants';
+
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
 interface PatientDashboardProps {
   user: User;
@@ -28,9 +29,11 @@ interface PatientDashboardProps {
 }
 
 export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogout, onNavigate }) => {
-  const [patients, setPatients] = useState<Patient[]>(MOCK_PATIENTS);
-  const [selectedPatientId, setSelectedPatientId] = useState<string>(MOCK_PATIENTS[0]?.id || '');
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [selectedPatientId, setSelectedPatientId] = useState<string>('');
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
   
   // Search & Filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -50,6 +53,42 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
   );
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId);
+
+  useEffect(() => {
+    const fetchPatients = async () => {
+      setIsLoading(true);
+      setError('');
+      try {
+        const response = await fetch(`${API_BASE}/patients`);
+        if (!response.ok) {
+          throw new Error('Erreur lors du chargement des patients');
+        }
+
+        const data = await response.json();
+        const mappedPatients: Patient[] = data.map((patient: any) => ({
+          id: patient.external_id || patient.id?.toString(),
+          firstName: patient.first_name,
+          lastName: patient.last_name,
+          dob: patient.date_of_birth || '',
+          condition: patient.condition || '',
+          lastVisit: patient.last_visit || '',
+          images: [],
+        }));
+
+        setPatients(mappedPatients);
+        if (mappedPatients.length > 0) {
+          setSelectedPatientId(mappedPatients[0].id);
+        }
+      } catch (err) {
+        console.error(err);
+        setError('Impossible de récupérer les patients.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchPatients();
+  }, []);
 
   useEffect(() => {
     // Reset edit mode when changing patient
@@ -95,8 +134,8 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
 
   // Export Logic (Single or Multi)
   const handleExport = () => {
-    const idsToExport = selectedIds.size > 0 ? Array.from(selectedIds) : [selectedPatientId];
-    
+    const idsToExport = selectedIds.size > 0 ? Array.from(selectedIds) : selectedPatientId ? [selectedPatientId] : [];
+
     if (idsToExport.length === 0) return;
 
     const patientsToExport = patients.filter(p => idsToExport.includes(p.id));
@@ -154,8 +193,8 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
 
   // Delete Logic
   const handleDelete = () => {
-    const idsToDelete = selectedIds.size > 0 ? Array.from(selectedIds) : [selectedPatientId];
-    
+    const idsToDelete = selectedIds.size > 0 ? Array.from(selectedIds) : selectedPatientId ? [selectedPatientId] : [];
+
     if (idsToDelete.length === 0) return;
 
     if (confirm(`Êtes-vous sûr de vouloir supprimer ${idsToDelete.length} patient(s) ? Cette action est irréversible.`)) {
@@ -246,6 +285,12 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
                 </button>
                 <span>{filteredPatients.length} patients</span>
             </div>
+            {isLoading && (
+              <div className="mt-3 text-xs text-slate-500">Chargement des patients...</div>
+            )}
+            {error && (
+              <div className="mt-3 p-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg">{error}</div>
+            )}
           </div>
 
           {/* Scrollable Patient List */}

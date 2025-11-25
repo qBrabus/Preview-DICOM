@@ -44,6 +44,11 @@ class UserRead(UserBase):
         orm_mode = True
 
 
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
 class PatientBase(BaseModel):
     external_id: str
     first_name: str
