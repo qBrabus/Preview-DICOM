@@ -93,6 +93,7 @@ services:
       - ohif
     networks:
       - public
+      - private
 
 volumes:
   pgdata:
