@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from passlib.exc import UnknownHashError
 
 from .config import settings
 
@@ -15,7 +16,26 @@ def get_password_hash(password: str) -> str:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except UnknownHashError:
+        return False
+
+
+def is_supported_password_hash(hashed_password: str) -> bool:
+    """
+    Return True when the stored password hash matches one of the configured
+    hashing schemes. This guards against legacy/plaintext values that would
+    otherwise raise an UnknownHashError during verification.
+    """
+
+    if not hashed_password:
+        return False
+
+    try:
+        return pwd_context.identify(hashed_password) is not None
+    except UnknownHashError:
+        return False
 
 
 def create_token(data: dict, expires_delta: timedelta) -> str:
