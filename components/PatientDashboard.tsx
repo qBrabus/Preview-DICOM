@@ -87,6 +87,8 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }
     lastVisit: patient.last_visit || '',
     dicomStudyUid: patient.dicom_study_uid || '',
     orthancPatientId: patient.orthanc_patient_id || '',
+    hasImages: Boolean(patient.has_images ?? patient.orthanc_patient_id),
+    imageCount: patient.image_count ?? images.length,
     images,
   });
 
@@ -96,8 +98,6 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }
     p.firstName.toLowerCase().includes(searchQuery.toLowerCase()) ||
     p.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
-  const selectedPatient = patients.find(p => p.id === selectedPatientId);
 
   const fetchPatientImages = async (recordId?: number) => {
     if (!recordId) return [] as Patient['images'];
@@ -120,6 +120,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }
   const patientsQuery = useQuery<Patient[]>({
     queryKey: ['patients'],
     enabled: Boolean(accessToken),
+    staleTime: 5 * 60 * 1000,
     queryFn: async () => {
       const response = await fetch(`${API_BASE}/patients`, withAuth({ credentials: 'include' }));
       if (!response.ok) {
@@ -127,17 +128,20 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }
       }
 
       const data = await response.json();
-      const mappedPatients: Patient[] = data.map((patient: any) => mapApiPatientToState(patient));
-
-      return Promise.all(
-        mappedPatients.map(async (patient) => {
-          if (!patient.recordId) return patient;
-          const images = await fetchPatientImages(patient.recordId);
-          return { ...patient, images };
-        })
-      );
+      return data.map((patient: any) => mapApiPatientToState(patient));
     },
   });
+
+  const selectedPatient = patients.find(p => p.id === selectedPatientId);
+
+  const patientImagesQuery = useQuery<Patient['images']>({
+    queryKey: ['patient-images', selectedPatient?.recordId],
+    enabled: Boolean(selectedPatient?.recordId && (selectedPatient?.hasImages || selectedPatient?.orthancPatientId)),
+    staleTime: 5 * 60 * 1000,
+    queryFn: () => fetchPatientImages(selectedPatient!.recordId!),
+  });
+
+  const selectedImages = patientImagesQuery.data ?? selectedPatient?.images ?? [];
 
   useEffect(() => {
     if (patientsQuery.data) {
@@ -165,13 +169,13 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }
   // -- Handlers --
 
   const handleNextImage = () => {
-    if (!selectedPatient || !selectedPatient.images.length) return;
-    setCurrentImageIndex((prev) => (prev + 1) % selectedPatient.images.length);
+    if (!selectedPatient || !selectedImages.length) return;
+    setCurrentImageIndex((prev) => (prev + 1) % selectedImages.length);
   };
 
   const handlePrevImage = () => {
-    if (!selectedPatient || !selectedPatient.images.length) return;
-    setCurrentImageIndex((prev) => (prev - 1 + selectedPatient.images.length) % selectedPatient.images.length);
+    if (!selectedPatient || !selectedImages.length) return;
+    setCurrentImageIndex((prev) => (prev - 1 + selectedImages.length) % selectedImages.length);
   };
 
   const handlePatientSelect = (id: string) => {
@@ -328,8 +332,16 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }
             file,
           }));
 
+          const resolvedImages = persistedImages.length ? persistedImages : fallbackImages;
           importedPatients.push(
-            mapApiPatientToState(savedPatient, persistedImages.length ? persistedImages : fallbackImages),
+            mapApiPatientToState(
+              {
+                ...savedPatient,
+                has_images: resolvedImages.length > 0,
+                image_count: resolvedImages.length,
+              },
+              resolvedImages,
+            ),
           );
           currentIds.add(patientData.id);
         }
@@ -413,10 +425,28 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }
 
   useEffect(() => {
     if (!selectedPatient) return;
-    if (currentImageIndex >= selectedPatient.images.length) {
+    if (patientImagesQuery.data) {
+      setPatients((prev) =>
+        prev.map((patient) =>
+          patient.id === selectedPatient.id
+            ? {
+                ...patient,
+                images: patientImagesQuery.data!,
+                hasImages: patientImagesQuery.data.length > 0,
+                imageCount: patientImagesQuery.data.length,
+              }
+            : patient
+        )
+      );
+    }
+  }, [patientImagesQuery.data, selectedPatient?.id]);
+
+  useEffect(() => {
+    if (!selectedPatient) return;
+    if (currentImageIndex >= selectedImages.length) {
       setCurrentImageIndex(0);
     }
-  }, [selectedPatient, currentImageIndex]);
+  }, [selectedPatient, selectedImages.length, currentImageIndex]);
 
   return (
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden">
@@ -616,7 +646,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }
                             <div className="p-2 bg-purple-50 text-purple-600 rounded-lg"><FileImage size={18} /></div>
                             <div>
                             <p className="text-xs text-slate-500">Images</p>
-                            <p className="text-sm font-medium text-slate-800">{selectedPatient.images.length} fichiers</p>
+                            <p className="text-sm font-medium text-slate-800">{selectedImages.length} fichiers</p>
                             </div>
                         </div>
                         </div>
@@ -686,22 +716,22 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }
                 <div className="flex-1 flex flex-col min-h-0 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden relative">
                     <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white">
                     <h3 className="font-semibold text-slate-800">Imagerie Médicale</h3>
-                    {selectedPatient.images.length > 0 && (
+                    {selectedImages.length > 0 && (
                         <span className="text-xs bg-slate-100 px-2 py-1 rounded text-slate-600">
-                        Image {currentImageIndex + 1} / {selectedPatient.images.length}
+                        Image {currentImageIndex + 1} / {selectedImages.length}
                         </span>
                     )}
                     </div>
 
                     <div className="flex-1 bg-slate-900 relative flex flex-col overflow-hidden group">
-                      {selectedPatient.images.length > 0 ? (
+                      {selectedImages.length > 0 ? (
                         <>
                           <div className="relative flex-1 w-full h-full overflow-hidden">
                             <div
                               className="absolute inset-0 flex transition-transform duration-500"
                               style={{ transform: `translateX(-${currentImageIndex * 100}%)` }}
                             >
-                              {selectedPatient.images.map((image, index) => (
+                              {selectedImages.map((image, index) => (
                                 <div
                                   key={image.id || index}
                                   className="min-w-full h-full flex items-center justify-center p-6"
@@ -717,16 +747,16 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }
                           {/* Overlay Info */}
                           <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-4 text-white flex items-center justify-between">
                             <div>
-                              <p className="font-medium">{selectedPatient.images[currentImageIndex].description}</p>
-                              <p className="text-xs text-slate-300">{selectedPatient.images[currentImageIndex].date}</p>
+                              <p className="font-medium">{selectedImages[currentImageIndex].description}</p>
+                              <p className="text-xs text-slate-300">{selectedImages[currentImageIndex].date}</p>
                             </div>
                             <span className="text-xs bg-white/10 px-3 py-1 rounded-full">
-                              {currentImageIndex + 1} / {selectedPatient.images.length}
+                              {currentImageIndex + 1} / {selectedImages.length}
                             </span>
                           </div>
 
                           {/* Controls */}
-                          {selectedPatient.images.length > 1 && (
+                          {selectedImages.length > 1 && (
                             <>
                               <button
                                 onClick={handlePrevImage}
@@ -746,9 +776,9 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }
                           )}
 
                           {/* Thumbnail rail */}
-                          {selectedPatient.images.length > 1 && (
+                          {selectedImages.length > 1 && (
                             <div className="bg-slate-800 border-t border-slate-700 px-3 py-2 flex items-center gap-2 overflow-x-auto">
-                              {selectedPatient.images.map((image, index) => (
+                              {selectedImages.map((image, index) => (
                                 <button
                                   key={`thumb-${image.id || index}`}
                                   onClick={() => setCurrentImageIndex(index)}

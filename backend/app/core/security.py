@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
+from datetime import datetime, timedelta
+from secrets import token_urlsafe
+
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -55,3 +58,7 @@ def decode_token(token: str) -> dict:
             detail="Token invalide ou expiré",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def generate_csrf_token() -> str:
+    return token_urlsafe(32)

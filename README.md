@@ -26,17 +26,17 @@ Portail de prévisualisation DICOM conçu comme une stack de démonstration prê
 | **Frontend (React/Vite)** | UI de connexion, dashboard patient/admin | 4173 (dev/preview), 80/443 via Nginx | VITE_API_BASE pointant sur `/api`.
 | **Backend (FastAPI)** | API REST, authentification JWT, CRUD patients/utilisateurs/groupes | 8000 | Attente DB au démarrage + migrations minimales.
 | **PostgreSQL** | Stockage relationnel | 5432 (interne) | Volume `pgdata`.
-| **Orthanc** | Serveur DICOM + DICOMweb | 4242 (listener), 8042 (HTTP interne) | Utilisateur `admin/changeme` par défaut.
-| **OHIF Viewer** | Visualisation via DICOMweb | 3000 (direct), `/viewer` via Nginx | Configuré sur Orthanc (`infra/ohif-config.js`).
-| **Nginx** | Point d'entrée unique HTTPS, reverse-proxy | 80 (redirection), 443 | Proxy `/`, `/api`, `/viewer`.
+| **Orthanc** | Serveur DICOM + DICOMweb | Interne (4242/8042 sur réseau Docker uniquement) | Utilisateur `admin/changeme` par défaut, authentification injectée par Nginx.
+| **OHIF Viewer** | Visualisation via DICOMweb | 3000 (direct), `/viewer` via Nginx | Configuré pour consommer `/orthanc-proxy` sans exposer les secrets dans le navigateur.
+| **Nginx** | Point d'entrée unique HTTPS, reverse-proxy | 80 (redirection), 443 | Proxy `/`, `/api`, `/viewer` et `/orthanc-proxy`.
 
 ## Architecture
 ```
 Utilisateur → Nginx (443)
   ├─ /            → Frontend React (4173)
   ├─ /api         → FastAPI (8000) → PostgreSQL (5432)
-  └─ /viewer      → OHIF (3000) → Orthanc (8042 REST/DICOMweb)
-                          └─ Listener DICOM C-STORE (4242)
+  └─ /viewer      → OHIF (3000) → /orthanc-proxy → Orthanc (REST/DICOMweb)
+                          └─ Listener DICOM C-STORE (4242, interne)
 ```
 
 ## Prérequis
@@ -63,8 +63,8 @@ docker-compose down
 - **API FastAPI** : https://localhost/api (ou http://localhost:8000 en direct)
 - **Documentation OpenAPI** : https://localhost/api/docs
 - **Viewer OHIF** : https://localhost/viewer (ou http://localhost:3000 en direct)
-- **Orthanc (REST/DICOMweb)** : http://localhost:8042
-- **Listener DICOM C-STORE** : port `4242`
+- **DICOMweb proxifié** : https://localhost/orthanc-proxy (auth Basic injectée par Nginx)
+- **Listener DICOM C-STORE** : interne au réseau Docker (`orthanc:4242`)
 
 ## Identifiants et données d'exemple
 - **Administrateur par défaut** : `admin@imagine.fr` / `Admin123!`
@@ -88,6 +88,16 @@ docker-compose down
   uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
   ```
   Variables utiles : `POSTGRES_*`, `ORTHANC_USER`, `ORTHANC_PASSWORD` (voir `docker-compose.yml`).
+
+### Migrations de base de données
+Alembic est configuré pour suivre les évolutions du schéma SQLAlchemy :
+
+```bash
+cd backend
+alembic upgrade head
+```
+
+Les URL de connexion sont dérivées des variables `POSTGRES_*`; la commande attend que la base soit accessible.
 
 ### Débogage et santé
 - Endpoint de santé : `GET /health`
@@ -117,7 +127,8 @@ docker-compose down
 
 ## Personnalisation et points d'attention
 - **SSL Nginx** : des certificats autosignés sont attendus dans `infra/certs` (`selfsigned.crt`/`selfsigned.key`). Remplacez-les pour un déploiement réel.
-- **Sécurité Orthanc** : changez le mot de passe `changeme` dans `docker-compose.yml` et ajustez la config OHIF si nécessaire.
+- **Sécurité Orthanc** : Orthanc n'est plus exposé publiquement ; les requêtes passent par `/orthanc-proxy` avec header Basic injecté. Changez les identifiants par défaut et régénérez la valeur encodée dans `infra/nginx.conf` si besoin.
+- **Protection CSRF** : le refresh token HttpOnly est combiné à un cookie `csrf_token` (SameSite=Strict) à renvoyer dans l'en-tête `X-CSRF-Token` lors du refresh.
 - **Limite d'upload** : `client_max_body_size 500g` dans `infra/nginx.conf` permet des lots volumineux ; adaptez selon vos besoins.
-- **Migrations ad hoc** : `backend/app/main.py` applique une mise à niveau idempotente (ajout de colonne `status`). Prévoir Alembic pour une maintenance avancée.
-- **Tokens** : les refresh tokens sont placés en cookie HttpOnly/SameSite=Lax ; adapter la configuration pour un domaine/HTTPS final.
+- **Migrations** : Alembic est fourni (`backend/alembic.ini`). Exécuter `alembic upgrade head` pour aligner le schéma sur les modèles SQLAlchemy.
+- **Performances frontend** : la liste des patients ne déclenche plus de requêtes images systématiques ; le détail DICOM est chargé à la demande et mis en cache (React Query `staleTime`).
