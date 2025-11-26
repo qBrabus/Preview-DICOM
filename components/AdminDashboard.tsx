@@ -255,7 +255,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
       if (!response.ok) throw new Error('Impossible de récupérer les patients');
       const data = await response.json();
       const casted = data as Patient[];
-      const dicomCount = casted.reduce((acc, patient) => acc + (patient.images?.length || 0), 0);
+      const dicomCount = casted.reduce(
+        (acc, patient) => acc + (patient.imageCount || patient.images?.length || 0),
+        0,
+      );
       setPatientStats({ patients: casted.length, dicoms: dicomCount });
     } catch (err) {
       console.error(err);

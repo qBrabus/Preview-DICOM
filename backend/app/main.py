@@ -174,11 +174,18 @@ def refresh_token(
     response: Response,
     request: Request,
     db: Session = Depends(get_db),
-    _: None = Depends(enforce_csrf),
 ):
     refresh_token = request.cookies.get("refresh_token")
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Token manquant")
+
+    csrf_cookie = request.cookies.get("csrf_token")
+    csrf_header = request.headers.get("X-CSRF-Token")
+    if csrf_cookie and csrf_header and csrf_cookie != csrf_header:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requête interdite: CSRF token invalide",
+        )
 
     payload = security.decode_token(refresh_token)
     if payload.get("type") != "refresh":
@@ -189,7 +196,7 @@ def refresh_token(
         raise HTTPException(status_code=401, detail="Utilisateur introuvable")
 
     access_token = security.create_token({"sub": user.id}, settings.access_token_ttl)
-    csrf_token = request.cookies.get("csrf_token") or security.generate_csrf_token()
+    csrf_token = csrf_cookie or security.generate_csrf_token()
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
@@ -436,21 +443,44 @@ def import_patient(
 
 
 @app.get("/patients", response_model=List[schemas.PatientRead], tags=["patients"])
-def list_patients(db: Session = Depends(get_db)):
+def list_patients(db: Session = Depends(get_db), orthanc: OrthancClient = Depends(get_orthanc_client)):
     patients = db.query(models.Patient).all()
     for patient in patients:
-        patient.has_images = bool(patient.orthanc_patient_id)
-        patient.image_count = 0
+        if patient.orthanc_patient_id:
+            try:
+                instance_ids = orthanc.list_instances(patient.orthanc_patient_id)
+                patient.image_count = len(instance_ids)
+                patient.has_images = patient.image_count > 0
+            except HTTPException:
+                patient.has_images = True
+                patient.image_count = 0
+        else:
+            patient.has_images = False
+            patient.image_count = 0
     return patients
 
 
 @app.get("/patients/{patient_id}", response_model=schemas.PatientRead, tags=["patients"])
-def get_patient(patient_id: int, db: Session = Depends(get_db)):
+def get_patient(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    orthanc: OrthancClient = Depends(get_orthanc_client),
+):
     patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
-    patient.has_images = bool(patient.orthanc_patient_id)
-    patient.image_count = 0
+
+    if patient.orthanc_patient_id:
+        try:
+            instance_ids = orthanc.list_instances(patient.orthanc_patient_id)
+            patient.image_count = len(instance_ids)
+            patient.has_images = patient.image_count > 0
+        except HTTPException:
+            patient.has_images = True
+            patient.image_count = 0
+    else:
+        patient.has_images = False
+        patient.image_count = 0
     return patient
 
 
