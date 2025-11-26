@@ -21,12 +21,19 @@ export const DicomViewer: React.FC<DicomViewerProps> = ({ image }) => {
     const element = elementRef.current;
     if (!element) return;
 
-    cornerstone.enable(element);
-    setError(null);
+    try {
+      cornerstone.enable(element);
+    } catch (e) {
+      // L'élément peut déjà être activé si React a remonté le composant rapidement
+    }
 
+    let isMounted = true;
     let imageId: string | null = null;
-    const loadImage = async () => {
+
+    const loadAndDisplayImage = async () => {
       try {
+        setError(null);
+
         if (image.file) {
           imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(image.file);
         } else {
@@ -37,21 +44,35 @@ export const DicomViewer: React.FC<DicomViewerProps> = ({ image }) => {
         }
 
         const loadedImage = await cornerstone.loadAndCacheImage(imageId);
-        const viewport = cornerstone.getDefaultViewportForImage(element, loadedImage);
-        cornerstone.displayImage(element, loadedImage, viewport);
+
+        if (isMounted && element) {
+          const viewport = cornerstone.getDefaultViewportForImage(element, loadedImage);
+          cornerstone.displayImage(element, loadedImage, viewport);
+        }
       } catch (err) {
         console.error('Erreur lors du rendu DICOM', err);
-        setError("Impossible d'afficher l'aperçu DICOM.");
+        if (isMounted) {
+          setError("Impossible d'afficher l'aperçu DICOM.");
+        }
       }
     };
 
-    loadImage();
+    loadAndDisplayImage();
 
     return () => {
+      isMounted = false;
+
+      if (element) {
+        try {
+          cornerstone.disable(element);
+        } catch (e) {
+          console.warn('Erreur lors de la désactivation de cornerstone', e);
+        }
+      }
+
       if (imageId && image.file) {
         cornerstoneWADOImageLoader.wadouri.fileManager.remove(imageId);
       }
-      cornerstone.disable(element);
     };
   }, [image]);
 

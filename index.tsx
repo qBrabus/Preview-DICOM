@@ -9,7 +9,6 @@ if (!rootElement) {
 
 const root = ReactDOM.createRoot(rootElement);
 root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
+  // StrictMode removed to prevent double-mounting issues with Cornerstone and auth refresh calls
+  <App />
 );

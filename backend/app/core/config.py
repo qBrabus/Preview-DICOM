@@ -19,7 +19,9 @@ class Settings(BaseSettings):
     postgres_db: str = os.getenv("POSTGRES_DB", "preview_dicom")
     postgres_host: str = os.getenv("POSTGRES_HOST", "db")
     postgres_port: str = os.getenv("POSTGRES_PORT", "5432")
+    # Configuration Cookies
     cookie_secure: bool = os.getenv("COOKIE_SECURE", "true").lower() == "true"
+    # Passer à "lax" pour éviter les problèmes de redirection/refresh sur localhost/domaines locaux
     cookie_samesite: str = os.getenv("COOKIE_SAMESITE", "lax")
     cookie_domain: str | None = os.getenv("COOKIE_DOMAIN")
 
@@ -43,6 +45,7 @@ class Settings(BaseSettings):
             "samesite": self.cookie_samesite,
             "max_age": int(self.refresh_token_ttl.total_seconds()),
             "domain": self.cookie_domain,
+            "path": "/",
         }
 
     @property
@@ -53,6 +56,7 @@ class Settings(BaseSettings):
             "samesite": self.cookie_samesite,
             "max_age": int(self.refresh_token_ttl.total_seconds()),
             "domain": self.cookie_domain,
+            "path": "/",
         }
 
 
