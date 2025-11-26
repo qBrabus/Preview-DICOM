@@ -6,10 +6,10 @@ import {
 } from 'lucide-react';
 import { ViewState, User, Group, UserStatus, GroupPermissions, Patient } from '../types';
 import { Logo } from './Logo';
+import { useAuth } from '../contexts/AuthContext';
 
 interface AdminDashboardProps {
   onNavigate: (view: ViewState) => void;
-  accessToken: string | null;
 }
 
 type Tab = 'overview' | 'users' | 'groups';
@@ -19,7 +19,8 @@ const API_BASE =
   import.meta.env.VITE_API_BASE ||
   '/api';
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, accessToken }) => {
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) => {
+  const { accessToken, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [users, setUsers] = useState<User[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);

@@ -1,21 +1,25 @@
 import React, { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Logo } from './Logo';
-import { User, ViewState } from '../types';
 import { X, Send, Mail } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
-const API_BASE =
-  import.meta.env.VITE_API_URL ||
-  import.meta.env.VITE_API_BASE ||
-  '/api';
+const loginSchema = z.object({
+  email: z.string().email('Email invalide'),
+  password: z.string().min(8, 'Le mot de passe doit contenir au moins 8 caractères'),
+});
 
-interface LoginProps {
-  onLogin: (user: User, token: string) => void;
-  onNavigate: (view: ViewState) => void;
-}
+type LoginForm = z.infer<typeof loginSchema>;
 
-export const Login: React.FC<LoginProps> = ({ onLogin }) => {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+export const Login: React.FC = () => {
+  const { login } = useAuth();
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginForm>({ resolver: zodResolver(loginSchema) });
   const [error, setError] = useState('');
   
   // Request Access Modal State
@@ -27,45 +31,13 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     reason: ''
   });
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!username || !password) {
-      setError('Veuillez remplir tous les champs');
-      return;
-    }
-
+  const onSubmit = async (payload: LoginForm) => {
+    setError('');
     try {
-      const response = await fetch(`${API_BASE}/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ email: username, password })
-      });
-
-      if (!response.ok) {
-        setError('Identifiants invalides');
-        return;
-      }
-
-      const data = await response.json();
-
-      const authenticatedUser: User = {
-        id: data.user.id,
-        username: data.user.email,
-        role: data.user.role === 'admin' ? 'admin' : 'user',
-        name: data.user.full_name,
-        email: data.user.email,
-        groupId: data.user.group?.id,
-        groupName: data.user.group?.name,
-        status: data.user.status || 'active',
-        expirationDate: data.user.expiration_date
-      };
-
-      onLogin(authenticatedUser, data.access_token);
+      await login(payload.email, payload.password);
     } catch (err) {
       console.error(err);
-      setError('Impossible de contacter le serveur.');
+      setError('Identifiants invalides');
     }
   };
 
@@ -106,7 +78,7 @@ Cordialement.`;
           <p className="text-slate-500 text-sm mt-1">Connectez-vous pour accéder aux dossiers</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
           {error && (
             <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100">
               {error}
@@ -117,30 +89,31 @@ Cordialement.`;
             <label className="text-sm font-medium text-slate-700 uppercase tracking-wide">Identifiant</label>
             <input
               type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              {...register('email')}
               className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all bg-slate-50 focus:bg-white"
               placeholder="Ex: dr.martin"
             />
+            {errors.email && <p className="text-red-600 text-xs">{errors.email.message}</p>}
           </div>
 
           <div className="space-y-2">
             <label className="text-sm font-medium text-slate-700 uppercase tracking-wide">Mot de passe</label>
             <input
               type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              {...register('password')}
               className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all bg-slate-50 focus:bg-white"
               placeholder="••••••••"
             />
+            {errors.password && <p className="text-red-600 text-xs">{errors.password.message}</p>}
           </div>
 
           <div className="pt-2">
             <button
               type="submit"
-              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-lg shadow-md hover:shadow-lg transition-all transform active:scale-95"
+              disabled={isSubmitting}
+              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold py-3 px-4 rounded-lg shadow-md hover:shadow-lg transition-all transform active:scale-95"
             >
-              Connexion
+              {isSubmitting ? 'Connexion...' : 'Connexion'}
             </button>
           </div>
         </form>

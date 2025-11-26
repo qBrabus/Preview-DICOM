@@ -278,9 +278,9 @@ def update_user(
 
     update_data = user_update.dict(exclude_unset=True)
     if "password" in update_data:
-        update_data["hashed_password"] = hashlib.sha256(
-            update_data.pop("password").encode()
-        ).hexdigest()
+        update_data["hashed_password"] = security.get_password_hash(
+            update_data.pop("password")
+        )
 
     for field, value in update_data.items():
         setattr(user, field, value)
