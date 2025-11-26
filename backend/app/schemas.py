@@ -17,6 +17,15 @@ class GroupCreate(GroupBase):
     pass
 
 
+class GroupUpdate(BaseModel):
+    name: Optional[str]
+    description: Optional[str]
+    can_edit_patients: Optional[bool]
+    can_export_data: Optional[bool]
+    can_manage_users: Optional[bool]
+    can_view_images: Optional[bool]
+
+
 class GroupRead(GroupBase):
     id: int
 
@@ -37,8 +46,19 @@ class UserCreate(UserBase):
     password: str
 
 
+class UserUpdate(BaseModel):
+    email: Optional[EmailStr]
+    full_name: Optional[str]
+    role: Optional[str]
+    status: Optional[str]
+    expiration_date: Optional[date]
+    group_id: Optional[int]
+    password: Optional[str]
+
+
 class UserRead(UserBase):
     id: int
+    group: Optional[GroupRead]
 
     class Config:
         orm_mode = True
@@ -69,3 +89,10 @@ class PatientRead(PatientBase):
 
     class Config:
         orm_mode = True
+
+
+class DicomImage(BaseModel):
+    id: str
+    url: str
+    description: Optional[str] = None
+    date: Optional[str] = None

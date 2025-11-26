@@ -51,12 +51,14 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       const data = await response.json();
 
       const authenticatedUser: User = {
-        id: data.id?.toString() || data.email,
+        id: data.id || 0,
         username: data.email,
         role: data.role === 'admin' ? 'admin' : 'user',
         name: data.full_name,
         email: data.email,
-        status: data.status
+        groupId: data.group?.id,
+        groupName: data.group?.name,
+        status: data.status || 'active'
       };
 
       onLogin(authenticatedUser);

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Login } from './components/Login';
 import { PatientDashboard } from './components/PatientDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -8,14 +8,38 @@ const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentView, setCurrentView] = useState<ViewState>(ViewState.LOGIN);
 
+  useEffect(() => {
+    const storedUser = localStorage.getItem('previewdcm:user');
+    const storedView = localStorage.getItem('previewdcm:view');
+
+    if (storedUser) {
+      try {
+        const parsedUser = JSON.parse(storedUser) as User;
+        setCurrentUser(parsedUser);
+        setCurrentView((storedView as ViewState) || ViewState.USER_DASHBOARD);
+      } catch (error) {
+        console.error('Failed to restore session', error);
+        localStorage.removeItem('previewdcm:user');
+        localStorage.removeItem('previewdcm:view');
+      }
+    }
+  }, []);
+
   const handleLogin = (user: User) => {
     setCurrentUser(user);
     setCurrentView(user.role === 'admin' ? ViewState.ADMIN_DASHBOARD : ViewState.USER_DASHBOARD);
+    localStorage.setItem('previewdcm:user', JSON.stringify(user));
+    localStorage.setItem(
+      'previewdcm:view',
+      user.role === 'admin' ? ViewState.ADMIN_DASHBOARD : ViewState.USER_DASHBOARD,
+    );
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
     setCurrentView(ViewState.LOGIN);
+    localStorage.removeItem('previewdcm:user');
+    localStorage.removeItem('previewdcm:view');
   };
 
   const handleNavigate = (view: ViewState) => {

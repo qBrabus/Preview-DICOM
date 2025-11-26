@@ -5,7 +5,7 @@ import time
 from typing import List
 
 import requests
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
@@ -135,6 +135,44 @@ def list_groups(db: Session = Depends(get_db)):
     return db.query(models.Group).all()
 
 
+@app.get("/groups/{group_id}", response_model=schemas.GroupRead, tags=["groups"])
+def get_group(group_id: int, db: Session = Depends(get_db)):
+    group = db.query(models.Group).filter(models.Group.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return group
+
+
+@app.put("/groups/{group_id}", response_model=schemas.GroupRead, tags=["groups"])
+def update_group(
+    group_id: int, group_update: schemas.GroupUpdate, db: Session = Depends(get_db)
+):
+    group = db.query(models.Group).filter(models.Group.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    for field, value in group_update.dict(exclude_unset=True).items():
+        setattr(group, field, value)
+
+    db.commit()
+    db.refresh(group)
+    return group
+
+
+@app.delete("/groups/{group_id}", status_code=204, tags=["groups"])
+def delete_group(group_id: int, db: Session = Depends(get_db)):
+    group = db.query(models.Group).filter(models.Group.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    # Detach users from the group to allow deletion
+    db.query(models.User).filter(models.User.group_id == group.id).update(
+        {models.User.group_id: None}
+    )
+    db.delete(group)
+    db.commit()
+
+
 @app.post("/users", response_model=schemas.UserRead, tags=["users"])
 def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
     hashed = hashlib.sha256(user.password.encode()).hexdigest()
@@ -156,6 +194,46 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
 @app.get("/users", response_model=List[schemas.UserRead], tags=["users"])
 def list_users(db: Session = Depends(get_db)):
     return db.query(models.User).all()
+
+
+@app.get("/users/{user_id}", response_model=schemas.UserRead, tags=["users"])
+def get_user(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@app.put("/users/{user_id}", response_model=schemas.UserRead, tags=["users"])
+def update_user(
+    user_id: int, user_update: schemas.UserUpdate, db: Session = Depends(get_db)
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    update_data = user_update.dict(exclude_unset=True)
+    if "password" in update_data:
+        update_data["hashed_password"] = hashlib.sha256(
+            update_data.pop("password").encode()
+        ).hexdigest()
+
+    for field, value in update_data.items():
+        setattr(user, field, value)
+
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@app.delete("/users/{user_id}", status_code=204, tags=["users"])
+def delete_user(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    db.delete(user)
+    db.commit()
 
 
 @app.post("/patients", response_model=schemas.PatientRead, tags=["patients"])
@@ -289,3 +367,86 @@ def get_patient(patient_id: int, db: Session = Depends(get_db)):
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
     return patient
+
+
+@app.delete("/patients/{patient_id}", status_code=204, tags=["patients"])
+def delete_patient(patient_id: int, db: Session = Depends(get_db)):
+    patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    if patient.orthanc_patient_id:
+        try:
+            requests.delete(
+                f"{ORTHANC_URL}/patients/{patient.orthanc_patient_id}",
+                timeout=10,
+            )
+        except requests.RequestException:
+            # Orthanc deletion failures shouldn't prevent DB cleanup
+            pass
+
+    db.delete(patient)
+    db.commit()
+
+
+@app.get(
+    "/patients/{patient_id}/images",
+    response_model=List[schemas.DicomImage],
+    tags=["patients"],
+)
+def list_patient_images(patient_id: int, db: Session = Depends(get_db)):
+    patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    if not patient.orthanc_patient_id:
+        return []
+
+    try:
+        instance_response = requests.get(
+            f"{ORTHANC_URL}/patients/{patient.orthanc_patient_id}/instances",
+            timeout=10,
+        )
+        instance_response.raise_for_status()
+        instance_ids = instance_response.json()
+    except requests.RequestException:
+        return []
+
+    images: List[schemas.DicomImage] = []
+    for instance_id in instance_ids:
+        try:
+            meta_response = requests.get(
+                f"{ORTHANC_URL}/instances/{instance_id}", timeout=10
+            )
+            meta_response.raise_for_status()
+            meta = meta_response.json()
+            tags = meta.get("MainDicomTags", {})
+        except requests.RequestException:
+            continue
+
+        images.append(
+            schemas.DicomImage(
+                id=instance_id,
+                url=f"/api/dicom/instances/{instance_id}",
+                description=tags.get("SeriesDescription")
+                or tags.get("StudyDescription")
+                or "Image DICOM",
+                date=tags.get("InstanceCreationDate")
+                or tags.get("StudyDate"),
+            )
+        )
+
+    return images
+
+
+@app.get("/dicom/instances/{instance_id}")
+def proxy_dicom_file(instance_id: str):
+    try:
+        response = requests.get(
+            f"{ORTHANC_URL}/instances/{instance_id}/file", timeout=15
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        raise HTTPException(status_code=502, detail="Impossible de récupérer le fichier DICOM")
+
+    return Response(content=response.content, media_type="application/dicom")

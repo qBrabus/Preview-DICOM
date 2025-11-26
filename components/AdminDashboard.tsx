@@ -1,13 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
-import { 
-  Users, UserPlus, Settings, ArrowLeft, Shield, Activity, 
+import {
+  Users, UserPlus, Settings, ArrowLeft, Shield, Activity,
   Search, Filter, Power, Trash2, Clock, CheckCircle, XCircle, Briefcase, Edit, X, Save, Key, XCircle as CloseIcon, Wand2
 } from 'lucide-react';
-import { ViewState, User, Group } from '../types';
-import { ADMIN_STATS_DATA, MOCK_USERS, MOCK_GROUPS } from '../constants';
+import { ViewState, User, Group, UserStatus, GroupPermissions } from '../types';
+import { ADMIN_STATS_DATA } from '../constants';
 import { Logo } from './Logo';
 
 interface AdminDashboardProps {
@@ -16,10 +16,17 @@ interface AdminDashboardProps {
 
 type Tab = 'overview' | 'users' | 'groups';
 
+const API_BASE =
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.VITE_API_BASE ||
+  '/api';
+
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) => {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
-  const [users, setUsers] = useState<User[]>(MOCK_USERS);
-  const [groups, setGroups] = useState<Group[]>(MOCK_GROUPS);
+  const [users, setUsers] = useState<User[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   // Search and Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -28,7 +35,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
   // -- Modals State --
   // Create User
   const [showCreateUser, setShowCreateUser] = useState(false);
-  const [newUser, setNewUser] = useState<Partial<User>>({ role: 'user', status: 'active' });
+  const [newUser, setNewUser] = useState<{
+    name?: string;
+    email?: string;
+    login?: string;
+    role?: 'admin' | 'user';
+    groupId?: number;
+    password?: string;
+    expirationDate?: string | null;
+  }>({ role: 'user' });
   const [isTemporary, setIsTemporary] = useState(false);
   const [generatedPassword, setGeneratedPassword] = useState('');
 
@@ -37,8 +52,87 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
 
   // Edit Group
   const [editingGroup, setEditingGroup] = useState<Group | null>(null);
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
 
   // -- Helpers --
+
+  const groupLookup = useMemo(
+    () => Object.fromEntries(groups.map((g) => [g.id, g])),
+    [groups]
+  );
+
+  const mapPermissions = (raw: any): GroupPermissions => ({
+    canEditPatients: Boolean(raw.can_edit_patients ?? raw.canEditPatients),
+    canExportData: Boolean(raw.can_export_data ?? raw.canExportData),
+    canManageUsers: Boolean(raw.can_manage_users ?? raw.canManageUsers),
+    canViewImages: Boolean(raw.can_view_images ?? raw.canViewImages),
+  });
+
+  const mapGroup = (raw: any): Group => ({
+    id: raw.id,
+    name: raw.name,
+    description: raw.description,
+    permissions: mapPermissions(raw),
+  });
+
+  const normalizeStatus = (status?: string, expiration?: string | null): UserStatus => {
+    if (expiration) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (expiration < today) return 'expired';
+    }
+    if (status === 'inactive' || status === 'disabled') return status as UserStatus;
+    return 'active';
+  };
+
+  const mapUser = (raw: any, groupsMap = groupLookup): User => ({
+    id: raw.id,
+    username: raw.email?.split('@')[0] || raw.full_name,
+    role: raw.role === 'admin' ? 'admin' : 'user',
+    name: raw.full_name,
+    email: raw.email,
+    groupId: raw.group_id,
+    groupName: raw.group?.name || groupsMap[raw.group_id]?.name,
+    status: normalizeStatus(raw.status, raw.expiration_date),
+    expirationDate: raw.expiration_date || null,
+  });
+
+  const loadGroups = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/groups`);
+      if (!response.ok) throw new Error('Impossible de récupérer les groupes');
+      const data = await response.json();
+      const mapped = (data as any[]).map(mapGroup);
+      setGroups(mapped);
+      if (!newUser.groupId && mapped.length > 0) {
+        setNewUser((prev) => ({ ...prev, groupId: mapped[0].id }));
+      }
+      return mapped;
+    } catch (err) {
+      console.error(err);
+      setError('Erreur lors du chargement des groupes');
+      return [] as Group[];
+    }
+  };
+
+  const loadUsers = async (groupData?: Group[]) => {
+    setLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/users`);
+      if (!response.ok) throw new Error('Impossible de récupérer les utilisateurs');
+      const data = await response.json();
+      const lookup = Object.fromEntries((groupData ?? groups).map((g) => [g.id, g]));
+      setUsers((data as any[]).map((raw) => mapUser(raw, lookup)));
+    } catch (err) {
+      console.error(err);
+      setError('Erreur lors du chargement des utilisateurs');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadGroups().then((groupData) => loadUsers(groupData));
+  }, []);
 
   const generateSecurePassword = () => {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
@@ -47,66 +141,180 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
       password += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     setGeneratedPassword(password);
+    setNewUser((prev) => ({ ...prev, password }));
   };
 
   // -- Handlers --
 
-  const handleToggleStatus = (userId: string) => {
-    setUsers(users.map(u => {
-      if (u.id === userId) {
-        const newStatus = u.status === 'active' ? 'inactive' : 'active';
-        return { ...u, status: newStatus };
-      }
-      return u;
-    }));
-  };
+  const handleToggleStatus = async (userId: number) => {
+    const target = users.find((u) => u.id === userId);
+    if (!target) return;
+    const newStatus: UserStatus = target.status === 'active' ? 'inactive' : 'active';
 
-  const handleDeleteUser = (userId: string) => {
-    if (confirm('Êtes-vous sûr de vouloir supprimer définitivement cet utilisateur ?')) {
-      const updatedList = users.filter(u => u.id !== userId);
-      setUsers(updatedList);
+    try {
+      const response = await fetch(`${API_BASE}/users/${userId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      if (!response.ok) throw new Error('Mise à jour du statut impossible');
+      setUsers(users.map((u) => (u.id === userId ? { ...u, status: newStatus } : u)));
+    } catch (err) {
+      console.error(err);
+      alert("Impossible de changer le statut de l'utilisateur");
     }
   };
 
-  const handleCreateUser = (e: React.FormEvent) => {
-    e.preventDefault();
-    const id = `u${Date.now()}`;
-    const userToAdd: User = {
-      id,
-      username: newUser.username || `user.${id}`,
-      name: newUser.name || 'Nouvel Utilisateur',
-      email: newUser.email || '',
-      role: newUser.role || 'user',
-      group: newUser.group || 'Internes / Stagiaires',
-      status: 'active',
-      expirationDate: isTemporary ? newUser.expirationDate : undefined
-    };
-    setUsers([...users, userToAdd]);
-    setShowCreateUser(false);
-    setNewUser({ role: 'user', status: 'active' });
-    setIsTemporary(false);
-    setGeneratedPassword('');
+  const handleDeleteUser = async (userId: number) => {
+    if (!confirm('Êtes-vous sûr de vouloir supprimer définitivement cet utilisateur ?')) return;
+
+    try {
+      const response = await fetch(`${API_BASE}/users/${userId}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Suppression échouée');
+      setUsers(users.filter((u) => u.id !== userId));
+    } catch (err) {
+      console.error(err);
+      alert("La suppression de l'utilisateur a échoué");
+    }
   };
 
-  const handleUpdateUser = (e: React.FormEvent) => {
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (!newUser.name || !(newUser.email || newUser.login) || !newUser.password) {
+      setError('Veuillez renseigner le nom, un identifiant/email et générer un mot de passe.');
+      return;
+    }
+
+    const email = newUser.email || `${newUser.login}@imagine.fr`;
+
+    const payload = {
+      full_name: newUser.name,
+      email,
+      password: newUser.password,
+      role: newUser.role || 'user',
+      status: 'active',
+      expiration_date: isTemporary ? newUser.expirationDate || null : null,
+      group_id: newUser.groupId,
+    };
+
+    try {
+      const response = await fetch(`${API_BASE}/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error('Création impossible');
+      const created = await response.json();
+      setUsers([...users, mapUser(created)]);
+      setShowCreateUser(false);
+      setNewUser({ role: 'user', groupId: newUser.groupId });
+      setIsTemporary(false);
+      setGeneratedPassword('');
+    } catch (err) {
+      console.error(err);
+      setError('Impossible de créer le compte utilisateur');
+    }
+  };
+
+  const handleUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
-    
-    setUsers(users.map(u => u.id === editingUser.id ? editingUser : u));
-    setEditingUser(null);
+
+    const payload = {
+      full_name: editingUser.name,
+      email: editingUser.email,
+      role: editingUser.role,
+      status: editingUser.status,
+      expiration_date: editingUser.expirationDate || null,
+      group_id: editingUser.groupId,
+    };
+
+    try {
+      const response = await fetch(`${API_BASE}/users/${editingUser.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error('Mise à jour impossible');
+      const updated = await response.json();
+      setUsers(users.map((u) => (u.id === editingUser.id ? mapUser(updated) : u)));
+      setEditingUser(null);
+    } catch (err) {
+      console.error(err);
+      alert('La mise à jour de l’utilisateur a échoué');
+    }
   };
 
-  const handleResetPassword = () => {
+  const handleResetPassword = async () => {
+    if (!editingUser) return;
     const tempPass = Math.random().toString(36).slice(-8).toUpperCase();
-    alert(`Réinitialisation effectuée.\n\nNouveau mot de passe temporaire : ${tempPass}\n\nVeuillez le transmettre à l'utilisateur de manière sécurisée.`);
+    try {
+      const response = await fetch(`${API_BASE}/users/${editingUser.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: tempPass }),
+      });
+      if (!response.ok) throw new Error('Reset impossible');
+      alert(`Réinitialisation effectuée.\n\nNouveau mot de passe temporaire : ${tempPass}\n\nVeuillez le transmettre à l'utilisateur de manière sécurisée.`);
+    } catch (err) {
+      console.error(err);
+      alert('Impossible de réinitialiser le mot de passe');
+    }
   };
 
-  const handleUpdateGroup = (e: React.FormEvent) => {
+  const handleUpdateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingGroup) return;
 
-    setGroups(groups.map(g => g.id === editingGroup.id ? editingGroup : g));
-    setEditingGroup(null);
+    const payload = {
+      name: editingGroup.name,
+      description: editingGroup.description,
+      can_edit_patients: editingGroup.permissions.canEditPatients,
+      can_view_images: editingGroup.permissions.canViewImages,
+      can_export_data: editingGroup.permissions.canExportData,
+      can_manage_users: editingGroup.permissions.canManageUsers,
+    };
+
+    try {
+      const url = isCreatingGroup
+        ? `${API_BASE}/groups`
+        : `${API_BASE}/groups/${editingGroup.id}`;
+      const method = isCreatingGroup ? 'POST' : 'PUT';
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error('Sauvegarde impossible');
+      const saved = mapGroup(await response.json());
+      if (isCreatingGroup) {
+        setGroups([...groups, saved]);
+      } else {
+        setGroups(groups.map((g) => (g.id === saved.id ? saved : g)));
+      }
+      setEditingGroup(null);
+      setIsCreatingGroup(false);
+    } catch (err) {
+      console.error(err);
+      alert('Impossible de sauvegarder le groupe');
+    }
+  };
+
+  const handleDeleteGroup = async (groupId: number) => {
+    if (!confirm('Supprimer ce groupe ? Les utilisateurs associés seront détachés.')) return;
+
+    try {
+      const response = await fetch(`${API_BASE}/groups/${groupId}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Suppression impossible');
+      setGroups(groups.filter((g) => g.id !== groupId));
+      setEditingGroup(null);
+      loadUsers();
+    } catch (err) {
+      console.error(err);
+      alert('La suppression du groupe a échoué');
+    }
   };
 
   const toggleGroupPermission = (perm: keyof Group['permissions']) => {
@@ -242,7 +450,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
                     </td>
                     <td className="px-6 py-4">
                     <div className="flex flex-col">
-                        <span className="text-slate-800">{user.group}</span>
+                        <span className="text-slate-800">{user.groupName || 'Non défini'}</span>
                         <span className="text-xs text-slate-500 capitalize">{user.role}</span>
                     </div>
                     </td>
@@ -298,7 +506,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-bold text-slate-800">Groupes & Droits d'accès</h2>
-        <button className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
+        <button
+          onClick={() => {
+            setIsCreatingGroup(true);
+            setEditingGroup({
+              id: 0,
+              name: '',
+              description: '',
+              permissions: {
+                canEditPatients: false,
+                canExportData: false,
+                canManageUsers: false,
+                canViewImages: true,
+              },
+            });
+          }}
+          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700"
+        >
           <Shield size={16} /> Créer un Groupe
         </button>
       </div>
@@ -310,8 +534,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
               <div className="p-3 bg-indigo-50 text-indigo-600 rounded-lg">
                 <Briefcase size={24} />
               </div>
-              <button 
-                onClick={() => setEditingGroup(group)}
+              <button
+                onClick={() => {
+                  setEditingGroup(group);
+                  setIsCreatingGroup(false);
+                }}
                 className="text-slate-400 hover:text-indigo-600"
               >
                 <Settings size={18} />
@@ -431,7 +658,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
                 </div>
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Identifiant</label>
-                  <input required type="text" onChange={(e) => setNewUser({...newUser, username: e.target.value})} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Ex: j.dupont" />
+                  <input required type="text" value={newUser.login || ''} onChange={(e) => setNewUser({...newUser, login: e.target.value})} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Ex: j.dupont" />
                 </div>
               </div>
 
@@ -463,8 +690,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Groupe</label>
-                  <select onChange={(e) => setNewUser({...newUser, group: e.target.value})} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
-                    {groups.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+                  <select value={newUser.groupId} onChange={(e) => setNewUser({...newUser, groupId: Number(e.target.value)})} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
+                    {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
                   </select>
                 </div>
                 <div className="space-y-1">
@@ -533,12 +760,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
                     />
                  </div>
                  <div className="space-y-1">
-                    <label className="text-sm font-medium text-slate-700">Identifiant</label>
-                    <input 
-                      type="text" 
+                 <label className="text-sm font-medium text-slate-700">Identifiant</label>
+                  <input
+                      type="text"
                       value={editingUser.username}
-                      onChange={(e) => setEditingUser({...editingUser, username: e.target.value})} 
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" 
+                      disabled
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-slate-50 text-slate-500"
                     />
                  </div>
               </div>
@@ -556,11 +783,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Groupe</label>
                   <select 
-                    value={editingUser.group}
-                    onChange={(e) => setEditingUser({...editingUser, group: e.target.value})} 
+                    value={editingUser.groupId ?? ''}
+                    onChange={(e) => setEditingUser({...editingUser, groupId: Number(e.target.value)})}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
                   >
-                    {groups.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+                    {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
                   </select>
                 </div>
                 <div className="space-y-1">
@@ -652,10 +879,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
                 </div>
               </div>
 
-              <div className="flex gap-3 pt-4 border-t border-slate-100">
-                <button type="button" onClick={() => setEditingGroup(null)} className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium">Annuler</button>
-                <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium shadow-sm">Sauvegarder</button>
-              </div>
+                <div className="flex gap-3 pt-4 border-t border-slate-100">
+                  {!isCreatingGroup && (
+                    <button
+                      type="button"
+                      onClick={() => editingGroup && handleDeleteGroup(editingGroup.id)}
+                      className="px-4 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 font-medium"
+                    >
+                      Supprimer
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => { setEditingGroup(null); setIsCreatingGroup(false); }}
+                    className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium"
+                  >
+                    Annuler
+                  </button>
+                  <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium shadow-sm">Sauvegarder</button>
+                </div>
             </form>
           </div>
         </div>

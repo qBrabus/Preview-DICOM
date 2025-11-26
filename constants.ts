@@ -51,19 +51,19 @@ export const MOCK_PATIENTS: Patient[] = [
 
 export const MOCK_GROUPS: Group[] = [
   {
-    id: 'g1',
+    id: 1,
     name: 'Administrateurs',
     description: 'Accès complet au système et gestion des utilisateurs',
     permissions: { canEditPatients: true, canExportData: true, canManageUsers: true, canViewImages: true }
   },
   {
-    id: 'g2',
+    id: 2,
     name: 'Médecins Seniors',
     description: 'Gestion des patients et imagerie',
     permissions: { canEditPatients: true, canExportData: true, canManageUsers: false, canViewImages: true }
   },
   {
-    id: 'g3',
+    id: 3,
     name: 'Internes / Stagiaires',
     description: 'Accès limité en lecture seule et durée limitée',
     permissions: { canEditPatients: false, canExportData: false, canManageUsers: false, canViewImages: true }
@@ -71,11 +71,11 @@ export const MOCK_GROUPS: Group[] = [
 ];
 
 export const MOCK_USERS: User[] = [
-  { id: 'u1', username: 'admin', name: 'Dr. Administrateur', email: 'admin@imagine.fr', role: 'admin', group: 'Administrateurs', status: 'active' },
-  { id: 'u2', username: 'dr.martin', name: 'Dr. Sophie Martin', email: 's.martin@imagine.fr', role: 'user', group: 'Médecins Seniors', status: 'active' },
-  { id: 'u3', username: 'interne.lucas', name: 'Lucas (Interne)', email: 'l.lucas@student.imagine.fr', role: 'user', group: 'Internes / Stagiaires', status: 'active', expirationDate: '2024-06-30' },
-  { id: 'u4', username: 'visiteur.temp', name: 'Consultant Externe', email: 'ext.consultant@gmail.com', role: 'user', group: 'Internes / Stagiaires', status: 'expired', expirationDate: '2023-01-01' },
-  { id: 'u5', username: 'dr.inactive', name: 'Dr. Ancien', email: 'ancien@imagine.fr', role: 'user', group: 'Médecins Seniors', status: 'inactive' },
+  { id: 1, username: 'admin', name: 'Dr. Administrateur', email: 'admin@imagine.fr', role: 'admin', groupId: 1, groupName: 'Administrateurs', status: 'active' },
+  { id: 2, username: 'dr.martin', name: 'Dr. Sophie Martin', email: 's.martin@imagine.fr', role: 'user', groupId: 2, groupName: 'Médecins Seniors', status: 'active' },
+  { id: 3, username: 'interne.lucas', name: 'Lucas (Interne)', email: 'l.lucas@student.imagine.fr', role: 'user', groupId: 3, groupName: 'Internes / Stagiaires', status: 'active', expirationDate: '2024-06-30' },
+  { id: 4, username: 'visiteur.temp', name: 'Consultant Externe', email: 'ext.consultant@gmail.com', role: 'user', groupId: 3, groupName: 'Internes / Stagiaires', status: 'expired', expirationDate: '2023-01-01' },
+  { id: 5, username: 'dr.inactive', name: 'Dr. Ancien', email: 'ancien@imagine.fr', role: 'user', groupId: 2, groupName: 'Médecins Seniors', status: 'inactive' },
 ];
 
 export const ADMIN_STATS_DATA = [

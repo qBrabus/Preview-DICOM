@@ -66,6 +66,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
 
   const mapApiPatientToState = (patient: any, images: Patient['images'] = []): Patient => ({
     id: patient.external_id || patient.id?.toString(),
+    recordId: patient.id,
     firstName: patient.first_name,
     lastName: patient.last_name,
     dob: patient.date_of_birth || '',
@@ -98,9 +99,28 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
         const data = await response.json();
         const mappedPatients: Patient[] = data.map((patient: any) => mapApiPatientToState(patient));
 
-        setPatients(mappedPatients);
-        if (mappedPatients.length > 0) {
-          setSelectedPatientId(mappedPatients[0].id);
+        const patientsWithImages = await Promise.all(
+          mappedPatients.map(async (patient) => {
+            if (!patient.recordId) return patient;
+
+            try {
+              const imagesResponse = await fetch(`${API_BASE}/patients/${patient.recordId}/images`);
+              if (!imagesResponse.ok) {
+                throw new Error('Impossible de récupérer les images DICOM');
+              }
+
+              const images = await imagesResponse.json();
+              return { ...patient, images };
+            } catch (imageError) {
+              console.error(imageError);
+              return patient;
+            }
+          })
+        );
+
+        setPatients(patientsWithImages);
+        if (patientsWithImages.length > 0) {
+          setSelectedPatientId(patientsWithImages[0].id);
         }
       } catch (err) {
         console.error(err);
@@ -288,15 +308,30 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
     if (idsToDelete.length === 0) return;
 
     if (confirm(`Êtes-vous sûr de vouloir supprimer ${idsToDelete.length} patient(s) ? Cette action est irréversible.`)) {
-        const remainingPatients = patients.filter(p => !idsToDelete.includes(p.id));
-        setPatients(remainingPatients);
-        setSelectedIds(new Set());
-        // Select first available if current was deleted
-        if (remainingPatients.length > 0) {
-            setSelectedPatientId(remainingPatients[0].id);
-        } else {
-            setSelectedPatientId('');
-        }
+        const requests = idsToDelete.map((patientId) => {
+            const patient = patients.find((p) => p.id === patientId);
+            if (!patient?.recordId) return Promise.resolve({ ok: false });
+            return fetch(`${API_BASE}/patients/${patient.recordId}`, { method: 'DELETE' });
+        });
+
+        Promise.all(requests).then((responses) => {
+            const failed = responses.filter((res) => !res.ok).length;
+            if (failed > 0) {
+                setError('Certaines suppressions n\'ont pas pu être effectuées.');
+            }
+
+            const remainingPatients = patients.filter(p => !idsToDelete.includes(p.id));
+            setPatients(remainingPatients);
+            setSelectedIds(new Set());
+            // Select first available if current was deleted
+            if (remainingPatients.length > 0) {
+                setSelectedPatientId(remainingPatients[0].id);
+            } else {
+                setSelectedPatientId('');
+            }
+        }).catch(() => {
+            setError('Erreur lors de la suppression des patients.');
+        });
     }
   };
 
