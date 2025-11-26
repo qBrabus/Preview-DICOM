@@ -1,22 +1,24 @@
-import hashlib
 import io
 import json
 import os
 import time
 import zipfile
-from typing import List
+from datetime import datetime
+from typing import AsyncIterator, List
 
-import requests
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from sqlalchemy import text
 
 from . import models, schemas
+from .core import security
+from .core.config import settings
 from .database import Base, engine, get_db, SessionLocal
+from .services.orthanc import OrthancClient, get_orthanc_client
 
-ORTHANC_URL = os.getenv("ORTHANC_URL", "http://orthanc:8042")
+ORTHANC_URL = settings.orthanc_url
 
 app = FastAPI(title="Preview DICOM Platform", version="0.1.0")
 
@@ -63,7 +65,7 @@ def seed_initial_data():
 
         admin_user = db.query(models.User).filter(models.User.email == "admin@imagine.fr").first()
         if not admin_user:
-            hashed = hashlib.sha256("Admin123!".encode()).hexdigest()
+            hashed = security.get_password_hash("Admin123!")
             admin_user = models.User(
                 email="admin@imagine.fr",
                 full_name="Administrateur",
@@ -98,7 +100,7 @@ seed_initial_data()
 # CORS for local dev and Docker overlay
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -110,17 +112,49 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.post("/auth/login", response_model=schemas.UserRead, tags=["auth"])
-def login(credentials: schemas.LoginRequest, db: Session = Depends(get_db)):
+@app.post("/auth/login", response_model=schemas.Token, tags=["auth"])
+def login(credentials: schemas.LoginRequest, response: Response, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == credentials.email).first()
+    if not user or not security.verify_password(credentials.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Identifiants invalides")
+
+    access_token = security.create_token({"sub": user.id}, settings.access_token_ttl)
+    refresh_token = security.create_token({"sub": user.id, "type": "refresh"}, settings.refresh_token_ttl)
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=int(settings.refresh_token_ttl.total_seconds()),
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/auth/refresh", response_model=schemas.Token, tags=["auth"])
+def refresh_token(response: Response, request: Request, db: Session = Depends(get_db)):
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Token manquant")
+
+    payload = security.decode_token(refresh_token)
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Token invalide")
+
+    user = db.query(models.User).get(payload.get("sub"))
     if not user:
-        raise HTTPException(status_code=401, detail="Identifiants invalides")
+        raise HTTPException(status_code=401, detail="Utilisateur introuvable")
 
-    hashed = hashlib.sha256(credentials.password.encode()).hexdigest()
-    if hashed != user.hashed_password:
-        raise HTTPException(status_code=401, detail="Identifiants invalides")
-
-    return user
+    access_token = security.create_token({"sub": user.id}, settings.access_token_ttl)
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=int(settings.refresh_token_ttl.total_seconds()),
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
 
 @app.post("/groups", response_model=schemas.GroupRead, tags=["groups"])
@@ -177,7 +211,7 @@ def delete_group(group_id: int, db: Session = Depends(get_db)):
 
 @app.post("/users", response_model=schemas.UserRead, tags=["users"])
 def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    hashed = hashlib.sha256(user.password.encode()).hexdigest()
+    hashed = security.get_password_hash(user.password)
     db_user = models.User(
         email=user.email,
         full_name=user.full_name,
@@ -289,11 +323,20 @@ def _normalize_patient_payload(raw_payload: dict) -> schemas.PatientCreate:
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+async def _chunk_reader(upload: UploadFile, chunk_size: int = 1024 * 1024) -> AsyncIterator[bytes]:
+    while True:
+        chunk = await upload.read(chunk_size)
+        if not chunk:
+            break
+        yield chunk
+
+
 @app.post("/patients/import", response_model=schemas.PatientRead, tags=["patients"])
 async def import_patient(
     patient: str = Form(...),
     dicom_files: List[UploadFile] = File(default_factory=list),
     db: Session = Depends(get_db),
+    orthanc: OrthancClient = Depends(get_orthanc_client),
 ):
     """Import a patient record and forward attached DICOM files to Orthanc."""
 
@@ -324,27 +367,16 @@ async def import_patient(
     dicom_study_uid = db_patient.dicom_study_uid
 
     for dicom_file in dicom_files:
-        content = await dicom_file.read()
         try:
-            response = requests.post(
-                f"{ORTHANC_URL}/instances",
-                data=content,
-                headers={"Content-Type": "application/dicom"},
-                timeout=15,
-            )
-            response.raise_for_status()
-            orthanc_response = response.json()
+            orthanc_response = await orthanc.upload_stream(_chunk_reader(dicom_file))
             orthanc_patient_id = orthanc_patient_id or orthanc_response.get("ParentPatient")
             dicom_study_uid = (
                 dicom_study_uid
                 or orthanc_response.get("ParentStudy")
                 or orthanc_response.get("MainDicomTags", {}).get("StudyInstanceUID")
             )
-        except requests.RequestException as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Failed to push DICOM to Orthanc: {exc}",
-            )
+        except HTTPException as exc:
+            raise exc
 
     if (
         orthanc_patient_id != db_patient.orthanc_patient_id
@@ -372,19 +404,19 @@ def get_patient(patient_id: int, db: Session = Depends(get_db)):
 
 
 @app.delete("/patients/{patient_id}", status_code=204, tags=["patients"])
-def delete_patient(patient_id: int, db: Session = Depends(get_db)):
+async def delete_patient(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    orthanc: OrthancClient = Depends(get_orthanc_client),
+):
     patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
 
     if patient.orthanc_patient_id:
         try:
-            requests.delete(
-                f"{ORTHANC_URL}/patients/{patient.orthanc_patient_id}",
-                timeout=10,
-            )
-        except requests.RequestException:
-            # Orthanc deletion failures shouldn't prevent DB cleanup
+            await orthanc.delete_patient(patient.orthanc_patient_id)
+        except HTTPException:
             pass
 
     db.delete(patient)
@@ -396,7 +428,11 @@ def delete_patient(patient_id: int, db: Session = Depends(get_db)):
     response_model=List[schemas.DicomImage],
     tags=["patients"],
 )
-def list_patient_images(patient_id: int, db: Session = Depends(get_db)):
+async def list_patient_images(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    orthanc: OrthancClient = Depends(get_orthanc_client),
+):
     patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -405,25 +441,16 @@ def list_patient_images(patient_id: int, db: Session = Depends(get_db)):
         return []
 
     try:
-        instance_response = requests.get(
-            f"{ORTHANC_URL}/patients/{patient.orthanc_patient_id}/instances",
-            timeout=10,
-        )
-        instance_response.raise_for_status()
-        instance_ids = instance_response.json()
-    except requests.RequestException:
+        instance_ids = await orthanc.list_instances(patient.orthanc_patient_id)
+    except HTTPException:
         return []
 
     images: List[schemas.DicomImage] = []
     for instance_id in instance_ids:
         try:
-            meta_response = requests.get(
-                f"{ORTHANC_URL}/instances/{instance_id}", timeout=10
-            )
-            meta_response.raise_for_status()
-            meta = meta_response.json()
+            meta = await orthanc.instance_metadata(instance_id)
             tags = meta.get("MainDicomTags", {})
-        except requests.RequestException:
+        except HTTPException:
             continue
 
         images.append(
@@ -442,7 +469,11 @@ def list_patient_images(patient_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/patients/{patient_id}/export")
-def export_patient(patient_id: int, db: Session = Depends(get_db)):
+async def export_patient(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    orthanc: OrthancClient = Depends(get_orthanc_client),
+):
     patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -451,13 +482,8 @@ def export_patient(patient_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Aucun DICOM disponible pour ce patient")
 
     try:
-        instance_response = requests.get(
-            f"{ORTHANC_URL}/patients/{patient.orthanc_patient_id}/instances",
-            timeout=10,
-        )
-        instance_response.raise_for_status()
-        instance_ids = instance_response.json()
-    except requests.RequestException:
+        instance_ids = await orthanc.list_instances(patient.orthanc_patient_id)
+    except HTTPException:
         raise HTTPException(status_code=502, detail="Impossible de récupérer les instances DICOM")
 
     folder_name = f"Patient-{patient.external_id or patient.id}"
@@ -478,23 +504,15 @@ def export_patient(patient_id: int, db: Session = Depends(get_db)):
 
         for idx, instance_id in enumerate(instance_ids, start=1):
             try:
-                meta_response = requests.get(
-                    f"{ORTHANC_URL}/instances/{instance_id}", timeout=10
-                )
-                meta_response.raise_for_status()
-                tags = meta_response.json().get("MainDicomTags", {})
-
-                dicom_response = requests.get(
-                    f"{ORTHANC_URL}/instances/{instance_id}/file", timeout=15
-                )
-                dicom_response.raise_for_status()
-            except requests.RequestException:
+                tags = (await orthanc.instance_metadata(instance_id)).get("MainDicomTags", {})
+                dicom_content = await orthanc.stream_instance(instance_id)
+            except HTTPException:
                 continue
 
             series = tags.get("SeriesNumber") or 1
             instance_number = tags.get("InstanceNumber") or idx
             file_name = f"{series}-{int(instance_number):02d}.dcm"
-            zip_file.writestr(f"{folder_name}/{file_name}", dicom_response.content)
+            zip_file.writestr(f"{folder_name}/{file_name}", dicom_content)
 
     export_buffer.seek(0)
     headers = {
@@ -504,13 +522,8 @@ def export_patient(patient_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/dicom/instances/{instance_id}")
-def proxy_dicom_file(instance_id: str):
-    try:
-        response = requests.get(
-            f"{ORTHANC_URL}/instances/{instance_id}/file", timeout=15
-        )
-        response.raise_for_status()
-    except requests.RequestException:
-        raise HTTPException(status_code=502, detail="Impossible de récupérer le fichier DICOM")
-
-    return Response(content=response.content, media_type="application/dicom")
+async def proxy_dicom_file(
+    instance_id: str, orthanc: OrthancClient = Depends(get_orthanc_client)
+):
+    content = await orthanc.stream_instance(instance_id)
+    return Response(content=content, media_type="application/dicom")
