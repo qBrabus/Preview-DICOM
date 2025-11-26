@@ -1,7 +1,9 @@
 import hashlib
+import io
 import json
 import os
 import time
+import zipfile
 from typing import List
 
 import requests
@@ -437,6 +439,68 @@ def list_patient_images(patient_id: int, db: Session = Depends(get_db)):
         )
 
     return images
+
+
+@app.get("/patients/{patient_id}/export")
+def export_patient(patient_id: int, db: Session = Depends(get_db)):
+    patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    if not patient.orthanc_patient_id:
+        raise HTTPException(status_code=404, detail="Aucun DICOM disponible pour ce patient")
+
+    try:
+        instance_response = requests.get(
+            f"{ORTHANC_URL}/patients/{patient.orthanc_patient_id}/instances",
+            timeout=10,
+        )
+        instance_response.raise_for_status()
+        instance_ids = instance_response.json()
+    except requests.RequestException:
+        raise HTTPException(status_code=502, detail="Impossible de récupérer les instances DICOM")
+
+    folder_name = f"Patient-{patient.external_id or patient.id}"
+    export_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(export_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        json_payload = {
+            "id": patient.external_id or patient.id,
+            "firstName": patient.first_name,
+            "lastName": patient.last_name,
+            "dob": patient.date_of_birth,
+            "condition": patient.condition,
+            "lastVisit": patient.last_visit,
+            "dicomStudyUid": patient.dicom_study_uid,
+            "orthancPatientId": patient.orthanc_patient_id,
+        }
+        zip_file.writestr(f"{folder_name}/{folder_name}.json", json.dumps(json_payload, indent=2))
+
+        for idx, instance_id in enumerate(instance_ids, start=1):
+            try:
+                meta_response = requests.get(
+                    f"{ORTHANC_URL}/instances/{instance_id}", timeout=10
+                )
+                meta_response.raise_for_status()
+                tags = meta_response.json().get("MainDicomTags", {})
+
+                dicom_response = requests.get(
+                    f"{ORTHANC_URL}/instances/{instance_id}/file", timeout=15
+                )
+                dicom_response.raise_for_status()
+            except requests.RequestException:
+                continue
+
+            series = tags.get("SeriesNumber") or 1
+            instance_number = tags.get("InstanceNumber") or idx
+            file_name = f"{series}-{int(instance_number):02d}.dcm"
+            zip_file.writestr(f"{folder_name}/{file_name}", dicom_response.content)
+
+    export_buffer.seek(0)
+    headers = {
+        "Content-Disposition": f"attachment; filename={folder_name}.zip"
+    }
+    return Response(content=export_buffer.getvalue(), media_type="application/zip", headers=headers)
 
 
 @app.get("/dicom/instances/{instance_id}")
