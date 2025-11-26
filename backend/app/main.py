@@ -171,6 +171,44 @@ def create_patient(patient: schemas.PatientCreate, db: Session = Depends(get_db)
     return db_patient
 
 
+def _normalize_patient_payload(raw_payload: dict) -> schemas.PatientCreate:
+    """Accept both snake_case and camelCase payloads and ensure required fields are present."""
+
+    payload = raw_payload.copy()
+
+    # Accept exported fields (camelCase) as well as API snake_case
+    if "external_id" not in payload and "id" in payload:
+        payload["external_id"] = payload.get("id")
+    if "first_name" not in payload and "firstName" in payload:
+        payload["first_name"] = payload.get("firstName")
+    if "last_name" not in payload and "lastName" in payload:
+        payload["last_name"] = payload.get("lastName")
+    if "date_of_birth" not in payload and "dob" in payload:
+        payload["date_of_birth"] = payload.get("dob")
+    if "last_visit" not in payload and "lastVisit" in payload:
+        payload["last_visit"] = payload.get("lastVisit")
+    if "dicom_study_uid" not in payload and "dicomStudyUid" in payload:
+        payload["dicom_study_uid"] = payload.get("dicomStudyUid")
+    if "orthanc_patient_id" not in payload and "orthancPatientId" in payload:
+        payload["orthanc_patient_id"] = payload.get("orthancPatientId")
+
+    missing = [
+        field
+        for field in ("external_id", "first_name", "last_name")
+        if not payload.get(field)
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Champs manquants pour le patient: {', '.join(missing)}",
+        )
+
+    try:
+        return schemas.PatientCreate(**payload)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @app.post("/patients/import", response_model=schemas.PatientRead, tags=["patients"])
 async def import_patient(
     patient: str = Form(...),
@@ -184,10 +222,7 @@ async def import_patient(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid patient payload")
 
-    try:
-        patient_in = schemas.PatientCreate(**payload)
-    except Exception as exc:  # pydantic validation errors
-        raise HTTPException(status_code=422, detail=str(exc))
+    patient_in = _normalize_patient_payload(payload)
 
     db_patient = (
         db.query(models.Patient)

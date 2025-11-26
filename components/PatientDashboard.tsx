@@ -188,13 +188,18 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
     setIsLoading(true);
     setError('');
     const groupedFiles: Record<string, { jsonFile?: File; dicomFiles: File[] }> = {};
+
     Array.from(e.target.files).forEach((file) => {
       const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-
-      // When a parent folder is selected (containing several patient folders), the first
-      // path segment is the common root. The actual patient folder is the second segment.
       const pathParts = relativePath.split('/').filter(Boolean);
-      const folderName = pathParts.length > 1 ? pathParts[1] : pathParts[0];
+
+      // Identify the patient folder name even if the user selected a parent directory
+      // that contains multiple patient folders.
+      const directories = pathParts.slice(0, -1); // remove file name
+      const folderName =
+        directories.find((part) => /^patient[-_]?/i.test(part)) ||
+        directories[directories.length - 1] ||
+        pathParts[0];
 
       if (!groupedFiles[folderName]) {
         groupedFiles[folderName] = { dicomFiles: [] };
