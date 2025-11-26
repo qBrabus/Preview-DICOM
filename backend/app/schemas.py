@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, constr, validator
+
+SAFE_TEXT_PATTERN = r"^[^<>]+$"
 
 
 class GroupBase(BaseModel):
@@ -37,7 +39,7 @@ class GroupRead(GroupBase):
 
 class UserBase(BaseModel):
     email: EmailStr
-    full_name: str
+    full_name: constr(strip_whitespace=True, min_length=1, regex=SAFE_TEXT_PATTERN)
     role: str = "user"
     status: str = "active"
     expiration_date: Optional[date]
@@ -82,17 +84,28 @@ class TokenPayload(BaseModel):
 
 class AuthResponse(Token):
     user: "UserRead"
+    csrf_token: str
 
 
 class PatientBase(BaseModel):
-    external_id: str
-    first_name: str
-    last_name: str
+    external_id: constr(strip_whitespace=True, min_length=1, regex=SAFE_TEXT_PATTERN)
+    first_name: constr(strip_whitespace=True, min_length=1, regex=SAFE_TEXT_PATTERN)
+    last_name: constr(strip_whitespace=True, min_length=1, regex=SAFE_TEXT_PATTERN)
     condition: Optional[str]
     date_of_birth: Optional[str]
     last_visit: Optional[str]
     dicom_study_uid: Optional[str]
     orthanc_patient_id: Optional[str]
+
+    @validator(
+        "condition", "date_of_birth", "last_visit", "dicom_study_uid", "orthanc_patient_id"
+    )
+    def sanitize_optional(cls, value: Optional[str]):
+        if value is None:
+            return value
+        if any(symbol in str(value) for symbol in ("<", ">")):
+            raise ValueError("Caractères HTML interdits dans les champs patients")
+        return str(value).strip()
 
 
 class PatientCreate(PatientBase):
@@ -101,6 +114,8 @@ class PatientCreate(PatientBase):
 
 class PatientRead(PatientBase):
     id: int
+    has_images: bool = False
+    image_count: int = 0
 
     class Config:
         orm_mode = True

@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     orthanc_url: str = os.getenv("ORTHANC_URL", "http://orthanc:8042")
     orthanc_username: str | None = os.getenv("ORTHANC_USER")
     orthanc_password: str | None = os.getenv("ORTHANC_PASSWORD")
+    postgres_user: str = os.getenv("POSTGRES_USER", "preview_dicom")
+    postgres_password: str = os.getenv("POSTGRES_PASSWORD", "preview_dicom")
+    postgres_db: str = os.getenv("POSTGRES_DB", "preview_dicom")
+    postgres_host: str = os.getenv("POSTGRES_HOST", "db")
+    postgres_port: str = os.getenv("POSTGRES_PORT", "5432")
 
     @property
     def allow_origins(self) -> List[str]:

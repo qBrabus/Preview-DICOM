@@ -17,6 +17,8 @@ export interface Patient {
   lastVisit: string;
   dicomStudyUid?: string;
   orthancPatientId?: string;
+  hasImages?: boolean;
+  imageCount?: number;
   images: MedicalImage[];
 }
 

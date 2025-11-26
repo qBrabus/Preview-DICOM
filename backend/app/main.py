@@ -4,7 +4,7 @@ import os
 import time
 import zipfile
 from datetime import datetime
-from typing import AsyncIterator, List
+from typing import Iterator, List
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +16,7 @@ from . import models, schemas
 from .core import security
 from .core.config import settings
 from .database import Base, engine, get_db, SessionLocal
+from .dependencies import enforce_csrf
 from .services.orthanc import OrthancClient, get_orthanc_client
 
 ORTHANC_URL = settings.orthanc_url
@@ -148,20 +149,39 @@ def login(credentials: schemas.LoginRequest, response: Response, db: Session = D
 
     access_token = security.create_token({"sub": user.id}, settings.access_token_ttl)
     refresh_token = security.create_token({"sub": user.id, "type": "refresh"}, settings.refresh_token_ttl)
+    csrf_token = security.generate_csrf_token()
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
         secure=True,
-        samesite="lax",
+        samesite="strict",
+        max_age=int(settings.refresh_token_ttl.total_seconds()),
+    )
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf_token,
+        httponly=False,
+        secure=True,
+        samesite="strict",
         max_age=int(settings.refresh_token_ttl.total_seconds()),
     )
     _ = user.group
-    return {"access_token": access_token, "token_type": "bearer", "user": user}
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user,
+        "csrf_token": csrf_token,
+    }
 
 
 @app.post("/auth/refresh", response_model=schemas.AuthResponse, tags=["auth"])
-def refresh_token(response: Response, request: Request, db: Session = Depends(get_db)):
+def refresh_token(
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(enforce_csrf),
+):
     refresh_token = request.cookies.get("refresh_token")
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Token manquant")
@@ -175,16 +195,30 @@ def refresh_token(response: Response, request: Request, db: Session = Depends(ge
         raise HTTPException(status_code=401, detail="Utilisateur introuvable")
 
     access_token = security.create_token({"sub": user.id}, settings.access_token_ttl)
+    csrf_token = request.cookies.get("csrf_token") or security.generate_csrf_token()
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
         secure=True,
-        samesite="lax",
+        samesite="strict",
+        max_age=int(settings.refresh_token_ttl.total_seconds()),
+    )
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf_token,
+        httponly=False,
+        secure=True,
+        samesite="strict",
         max_age=int(settings.refresh_token_ttl.total_seconds()),
     )
     _ = user.group
-    return {"access_token": access_token, "token_type": "bearer", "user": user}
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user,
+        "csrf_token": csrf_token,
+    }
 
 
 @app.post("/groups", response_model=schemas.GroupRead, tags=["groups"])
@@ -353,16 +387,16 @@ def _normalize_patient_payload(raw_payload: dict) -> schemas.PatientCreate:
         raise HTTPException(status_code=422, detail=str(exc))
 
 
-async def _chunk_reader(upload: UploadFile, chunk_size: int = 1024 * 1024) -> AsyncIterator[bytes]:
+def _iter_file(upload: UploadFile, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
     while True:
-        chunk = await upload.read(chunk_size)
+        chunk = upload.file.read(chunk_size)
         if not chunk:
             break
         yield chunk
 
 
 @app.post("/patients/import", response_model=schemas.PatientRead, tags=["patients"])
-async def import_patient(
+def import_patient(
     patient: str = Form(...),
     dicom_files: List[UploadFile] = File(default_factory=list),
     db: Session = Depends(get_db),
@@ -397,32 +431,29 @@ async def import_patient(
     dicom_study_uid = db_patient.dicom_study_uid
 
     for dicom_file in dicom_files:
-        try:
-            orthanc_response = await orthanc.upload_stream(_chunk_reader(dicom_file))
-            orthanc_patient_id = orthanc_patient_id or orthanc_response.get("ParentPatient")
-            dicom_study_uid = (
-                dicom_study_uid
-                or orthanc_response.get("ParentStudy")
-                or orthanc_response.get("MainDicomTags", {}).get("StudyInstanceUID")
-            )
-        except HTTPException as exc:
-            raise exc
+        orthanc_response = orthanc.upload_stream(_iter_file(dicom_file))
+        orthanc_patient_id = orthanc_response.get("ParentPatient") or orthanc_patient_id
+        dicom_study_uid = (
+            dicom_study_uid
+            or orthanc_response.get("ParentStudy")
+            or orthanc_response.get("MainDicomTags", {}).get("StudyInstanceUID")
+        )
 
-    if (
-        orthanc_patient_id != db_patient.orthanc_patient_id
-        or dicom_study_uid != db_patient.dicom_study_uid
-    ):
-        db_patient.orthanc_patient_id = orthanc_patient_id
-        db_patient.dicom_study_uid = dicom_study_uid
-        db.commit()
-        db.refresh(db_patient)
+    db_patient.orthanc_patient_id = orthanc_patient_id
+    db_patient.dicom_study_uid = dicom_study_uid
+    db.commit()
+    db.refresh(db_patient)
 
     return db_patient
 
 
 @app.get("/patients", response_model=List[schemas.PatientRead], tags=["patients"])
 def list_patients(db: Session = Depends(get_db)):
-    return db.query(models.Patient).all()
+    patients = db.query(models.Patient).all()
+    for patient in patients:
+        patient.has_images = bool(patient.orthanc_patient_id)
+        patient.image_count = 0
+    return patients
 
 
 @app.get("/patients/{patient_id}", response_model=schemas.PatientRead, tags=["patients"])
@@ -430,11 +461,13 @@ def get_patient(patient_id: int, db: Session = Depends(get_db)):
     patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
+    patient.has_images = bool(patient.orthanc_patient_id)
+    patient.image_count = 0
     return patient
 
 
 @app.delete("/patients/{patient_id}", status_code=204, tags=["patients"])
-async def delete_patient(
+def delete_patient(
     patient_id: int,
     db: Session = Depends(get_db),
     orthanc: OrthancClient = Depends(get_orthanc_client),
@@ -445,7 +478,7 @@ async def delete_patient(
 
     if patient.orthanc_patient_id:
         try:
-            await orthanc.delete_patient(patient.orthanc_patient_id)
+            orthanc.delete_patient(patient.orthanc_patient_id)
         except HTTPException:
             pass
 
@@ -458,7 +491,7 @@ async def delete_patient(
     response_model=List[schemas.DicomImage],
     tags=["patients"],
 )
-async def list_patient_images(
+def list_patient_images(
     patient_id: int,
     db: Session = Depends(get_db),
     orthanc: OrthancClient = Depends(get_orthanc_client),
@@ -471,14 +504,14 @@ async def list_patient_images(
         return []
 
     try:
-        instance_ids = await orthanc.list_instances(patient.orthanc_patient_id)
+        instance_ids = orthanc.list_instances(patient.orthanc_patient_id)
     except HTTPException:
         return []
 
     images: List[schemas.DicomImage] = []
     for instance_id in instance_ids:
         try:
-            meta = await orthanc.instance_metadata(instance_id)
+            meta = orthanc.instance_metadata(instance_id)
             tags = meta.get("MainDicomTags", {})
         except HTTPException:
             continue
@@ -499,7 +532,7 @@ async def list_patient_images(
 
 
 @app.get("/patients/{patient_id}/export")
-async def export_patient(
+def export_patient(
     patient_id: int,
     db: Session = Depends(get_db),
     orthanc: OrthancClient = Depends(get_orthanc_client),
@@ -512,7 +545,7 @@ async def export_patient(
         raise HTTPException(status_code=404, detail="Aucun DICOM disponible pour ce patient")
 
     try:
-        instance_ids = await orthanc.list_instances(patient.orthanc_patient_id)
+        instance_ids = orthanc.list_instances(patient.orthanc_patient_id)
     except HTTPException:
         raise HTTPException(status_code=502, detail="Impossible de récupérer les instances DICOM")
 
@@ -534,8 +567,8 @@ async def export_patient(
 
         for idx, instance_id in enumerate(instance_ids, start=1):
             try:
-                tags = (await orthanc.instance_metadata(instance_id)).get("MainDicomTags", {})
-                dicom_content = await orthanc.stream_instance(instance_id)
+                tags = orthanc.instance_metadata(instance_id).get("MainDicomTags", {})
+                dicom_content = orthanc.stream_instance(instance_id)
             except HTTPException:
                 continue
 
@@ -552,8 +585,6 @@ async def export_patient(
 
 
 @app.get("/dicom/instances/{instance_id}")
-async def proxy_dicom_file(
-    instance_id: str, orthanc: OrthancClient = Depends(get_orthanc_client)
-):
-    content = await orthanc.stream_instance(instance_id)
+def proxy_dicom_file(instance_id: str, orthanc: OrthancClient = Depends(get_orthanc_client)):
+    content = orthanc.stream_instance(instance_id)
     return Response(content=content, media_type="application/dicom")
