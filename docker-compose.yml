@@ -28,6 +28,8 @@ services:
       POSTGRES_PORT: 5432
       ORTHANC_USER: admin
       ORTHANC_PASSWORD: changeme
+      # Clé fixe pour persister les sessions entre les redémarrages
+      SECRET_KEY: "la-cle-secrete-super-securisee-pour-le-poc-imagine"
     depends_on:
       db:
         condition: service_healthy
