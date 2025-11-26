@@ -52,12 +52,29 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
 
   useEffect(() => {
     if (fileInputRef.current) {
-      fileInputRef.current.setAttribute('webkitdirectory', 'true');
-      fileInputRef.current.setAttribute('directory', 'true');
-      fileInputRef.current.setAttribute('mozdirectory', 'true');
-      fileInputRef.current.multiple = true;
+      const input = fileInputRef.current as HTMLInputElement & {
+        webkitdirectory?: boolean;
+        mozdirectory?: boolean;
+        directory?: boolean;
+      };
+      input.webkitdirectory = true;
+      input.mozdirectory = true;
+      input.directory = true;
+      input.multiple = true;
     }
   }, []);
+
+  const mapApiPatientToState = (patient: any, images: Patient['images'] = []): Patient => ({
+    id: patient.external_id || patient.id?.toString(),
+    firstName: patient.first_name,
+    lastName: patient.last_name,
+    dob: patient.date_of_birth || '',
+    condition: patient.condition || '',
+    lastVisit: patient.last_visit || '',
+    dicomStudyUid: patient.dicom_study_uid || '',
+    orthancPatientId: patient.orthanc_patient_id || '',
+    images,
+  });
 
   // Derived state for searching
   const filteredPatients = patients.filter(p => 
@@ -79,15 +96,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
         }
 
         const data = await response.json();
-        const mappedPatients: Patient[] = data.map((patient: any) => ({
-          id: patient.external_id || patient.id?.toString(),
-          firstName: patient.first_name,
-          lastName: patient.last_name,
-          dob: patient.date_of_birth || '',
-          condition: patient.condition || '',
-          lastVisit: patient.last_visit || '',
-          images: [],
-        }));
+        const mappedPatients: Patient[] = data.map((patient: any) => mapApiPatientToState(patient));
 
         setPatients(mappedPatients);
         if (mappedPatients.length > 0) {
@@ -176,6 +185,8 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
 
+    setIsLoading(true);
+    setError('');
     const groupedFiles: Record<string, { jsonFile?: File; dicomFiles: File[] }> = {};
     Array.from(e.target.files).forEach((file) => {
       const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
@@ -202,9 +213,9 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
         const parsed = JSON.parse(content);
         const parsedPatients: Patient[] = Array.isArray(parsed) ? parsed : [parsed];
 
-        parsedPatients.forEach((patientData) => {
-          if (!patientData.id || !patientData.lastName) return;
-          if (currentIds.has(patientData.id)) return;
+        for (const patientData of parsedPatients) {
+          if (!patientData.id || !patientData.lastName) continue;
+          if (currentIds.has(patientData.id)) continue;
 
           const dicomImages = dicomFiles.map((file) => ({
             id: file.name,
@@ -214,25 +225,49 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
             file,
           }));
 
-          importedPatients.push({
-            ...patientData,
-            images: dicomImages.length > 0 ? dicomImages : patientData.images || [],
+          const payload = {
+            external_id: patientData.id,
+            first_name: patientData.firstName,
+            last_name: patientData.lastName,
+            condition: patientData.condition || '',
+            date_of_birth: patientData.dob || '',
+            last_visit: patientData.lastVisit || '',
+            dicom_study_uid: (patientData as any).dicomStudyUid || '',
+            orthanc_patient_id: (patientData as any).orthancPatientId || '',
+          };
+
+          const formData = new FormData();
+          formData.append('patient', JSON.stringify(payload));
+          dicomFiles.forEach((file) => formData.append('dicom_files', file));
+
+          const response = await fetch(`${API_BASE}/patients/import`, {
+            method: 'POST',
+            body: formData,
           });
+
+          if (!response.ok) {
+            throw new Error(`Import patient ${patientData.id} failed: ${response.status}`);
+          }
+
+          const savedPatient = await response.json();
+          importedPatients.push(mapApiPatientToState(savedPatient, dicomImages));
           currentIds.add(patientData.id);
-        });
+        }
       } catch (err) {
         console.error(`Erreur lors de la lecture du dossier ${folder}`, err);
+        setError('Impossible d\'importer tous les dossiers. Consultez la console pour plus de détails.');
       }
     }
 
     if (importedPatients.length > 0) {
-      setPatients([...patients, ...importedPatients]);
+      setPatients((prev) => [...prev, ...importedPatients]);
       alert(`${importedPatients.length} patient(s) importé(s) avec succès depuis ${Object.keys(groupedFiles).length} dossier(s).`);
     } else {
       alert('Aucun nouveau patient importé. Vérifiez les dossiers ou les IDs existants.');
     }
 
     e.target.value = '';
+    setIsLoading(false);
   };
 
   // Delete Logic
@@ -425,6 +460,12 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
                       ref={fileInputRef}
                       onChange={handleFileChange}
                       multiple
+                      // @ts-ignore – required to allow folder selection with multiple directories
+                      webkitdirectory="true"
+                      // @ts-ignore
+                      mozdirectory="true"
+                      // @ts-ignore
+                      directory="true"
                       accept=".json,.dcm"
                     />
                     <button 

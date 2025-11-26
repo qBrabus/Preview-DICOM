@@ -14,6 +14,8 @@ export interface Patient {
   dob: string;
   condition: string;
   lastVisit: string;
+  dicomStudyUid?: string;
+  orthancPatientId?: string;
   images: MedicalImage[];
 }
 

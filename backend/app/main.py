@@ -1,8 +1,11 @@
 import hashlib
+import json
+import os
 import time
 from typing import List
 
-from fastapi import Depends, FastAPI, HTTPException
+import requests
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
@@ -10,6 +13,8 @@ from sqlalchemy import text
 
 from . import models, schemas
 from .database import Base, engine, get_db, SessionLocal
+
+ORTHANC_URL = os.getenv("ORTHANC_URL", "http://orthanc:8042")
 
 app = FastAPI(title="Preview DICOM Platform", version="0.1.0")
 
@@ -155,10 +160,86 @@ def list_users(db: Session = Depends(get_db)):
 
 @app.post("/patients", response_model=schemas.PatientRead, tags=["patients"])
 def create_patient(patient: schemas.PatientCreate, db: Session = Depends(get_db)):
+    existing = db.query(models.Patient).filter(models.Patient.external_id == patient.external_id).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Patient already exists")
+
     db_patient = models.Patient(**patient.dict())
     db.add(db_patient)
     db.commit()
     db.refresh(db_patient)
+    return db_patient
+
+
+@app.post("/patients/import", response_model=schemas.PatientRead, tags=["patients"])
+async def import_patient(
+    patient: str = Form(...),
+    dicom_files: List[UploadFile] = File(default_factory=list),
+    db: Session = Depends(get_db),
+):
+    """Import a patient record and forward attached DICOM files to Orthanc."""
+
+    try:
+        payload = json.loads(patient)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid patient payload")
+
+    try:
+        patient_in = schemas.PatientCreate(**payload)
+    except Exception as exc:  # pydantic validation errors
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    db_patient = (
+        db.query(models.Patient)
+        .filter(models.Patient.external_id == patient_in.external_id)
+        .first()
+    )
+
+    if db_patient:
+        for field, value in patient_in.dict().items():
+            setattr(db_patient, field, value)
+    else:
+        db_patient = models.Patient(**patient_in.dict())
+        db.add(db_patient)
+
+    db.commit()
+    db.refresh(db_patient)
+
+    orthanc_patient_id = db_patient.orthanc_patient_id
+    dicom_study_uid = db_patient.dicom_study_uid
+
+    for dicom_file in dicom_files:
+        content = await dicom_file.read()
+        try:
+            response = requests.post(
+                f"{ORTHANC_URL}/instances",
+                data=content,
+                headers={"Content-Type": "application/dicom"},
+                timeout=15,
+            )
+            response.raise_for_status()
+            orthanc_response = response.json()
+            orthanc_patient_id = orthanc_patient_id or orthanc_response.get("ParentPatient")
+            dicom_study_uid = (
+                dicom_study_uid
+                or orthanc_response.get("ParentStudy")
+                or orthanc_response.get("MainDicomTags", {}).get("StudyInstanceUID")
+            )
+        except requests.RequestException as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to push DICOM to Orthanc: {exc}",
+            )
+
+    if (
+        orthanc_patient_id != db_patient.orthanc_patient_id
+        or dicom_study_uid != db_patient.dicom_study_uid
+    ):
+        db_patient.orthanc_patient_id = orthanc_patient_id
+        db_patient.dicom_study_uid = dicom_study_uid
+        db.commit()
+        db.refresh(db_patient)
+
     return db_patient
 
 
