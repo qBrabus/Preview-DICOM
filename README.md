@@ -121,5 +121,3 @@ docker-compose down
 - **Limite d'upload** : `client_max_body_size 500g` dans `infra/nginx.conf` permet des lots volumineux ; adaptez selon vos besoins.
 - **Migrations ad hoc** : `backend/app/main.py` applique une mise à niveau idempotente (ajout de colonne `status`). Prévoir Alembic pour une maintenance avancée.
 - **Tokens** : les refresh tokens sont placés en cookie HttpOnly/SameSite=Lax ; adapter la configuration pour un domaine/HTTPS final.
-
-Pour aller plus loin, étendez les routes FastAPI (`backend/app/routers`) et les pages React (`components/`) afin d'intégrer votre logique métier.
