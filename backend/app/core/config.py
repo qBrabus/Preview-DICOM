@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     postgres_db: str = os.getenv("POSTGRES_DB", "preview_dicom")
     postgres_host: str = os.getenv("POSTGRES_HOST", "db")
     postgres_port: str = os.getenv("POSTGRES_PORT", "5432")
+    cookie_secure: bool = os.getenv("COOKIE_SECURE", "true").lower() == "true"
+    cookie_samesite: str = os.getenv("COOKIE_SAMESITE", "lax")
+    cookie_domain: str | None = os.getenv("COOKIE_DOMAIN")
 
     @property
     def allow_origins(self) -> List[str]:
@@ -31,6 +34,26 @@ class Settings(BaseSettings):
     @property
     def refresh_token_ttl(self) -> timedelta:
         return timedelta(minutes=self.refresh_token_expire_minutes)
+
+    @property
+    def refresh_cookie_params(self) -> dict:
+        return {
+            "httponly": True,
+            "secure": self.cookie_secure,
+            "samesite": self.cookie_samesite,
+            "max_age": int(self.refresh_token_ttl.total_seconds()),
+            "domain": self.cookie_domain,
+        }
+
+    @property
+    def csrf_cookie_params(self) -> dict:
+        return {
+            "httponly": False,
+            "secure": self.cookie_secure,
+            "samesite": self.cookie_samesite,
+            "max_age": int(self.refresh_token_ttl.total_seconds()),
+            "domain": self.cookie_domain,
+        }
 
 
 settings = Settings()
