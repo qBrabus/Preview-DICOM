@@ -8,11 +8,10 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
-        // AJOUTEZ CECI DANS LA SECTION SERVER
-        allowedHosts: ['dicom.local'], 
+        allowedHosts: true, 
       },
       preview: {
-        allowedHosts: ['dicom.local'],
+        allowedHosts: true,
       },
       plugins: [react()],
       define: {
