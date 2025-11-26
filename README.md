@@ -74,6 +74,12 @@ Utilisateur → Nginx (port 80)
 - **Personnalisation Nginx** : adaptez les hôtes ou chemins dans `infra/nginx.conf` si vous déployez derrière un autre reverse-proxy.
 
 ## Prochaines étapes proposées
-- Brancher le frontend sur `/api` pour l'authentification, l'import DICOM et la gestion fine des permissions.
-- Sécuriser Orthanc (auth Basic ou JWT) et ajouter du stockage persistant dédié.
-- Ajouter un module d'import DICOM vers Orthanc (REST ou DICOM C-STORE) côté backend.
+- Brancher le frontend sur `/api` pour l'authentification, l'import DICOM et la gestion fine des permissions. ✅
+- Sécuriser Orthanc (auth Basic ou JWT) et ajouter du stockage persistant dédié. ✅
+- Ajouter un module d'import DICOM vers Orthanc (REST ou DICOM C-STORE) côté backend. ✅
+
+## Mises en œuvre récentes
+- **Frontend relié à l'API** : les écrans de connexion, d'administration et d'import utilisent désormais `/api` avec un jeton Bearer stocké côté client pour toutes les requêtes.
+- **Orthanc protégé et persistant** : l'authentification Basic est activée (variables `ORTHANC_USER` / `ORTHANC_PASSWORD` dans `docker-compose.yml`) et le volume Docker `orthanc-storage` préserve les données DICOM.
+- **Import DICOM intégré** : le backend expose `/patients/import` (upload REST) et le frontend gère les lots ZIP ou répertoires contenant JSON + fichiers `.dcm`, automatiquement routés vers Orthanc et persistés en base.
+- **Compatibilité base de données** : le backend applique au démarrage une migration idempotente pour ajouter la colonne `status` aux patients et éviter les erreurs de démarrage sur des volumes Postgres existants.

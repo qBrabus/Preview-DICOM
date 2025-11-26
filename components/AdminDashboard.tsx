@@ -9,6 +9,7 @@ import { Logo } from './Logo';
 
 interface AdminDashboardProps {
   onNavigate: (view: ViewState) => void;
+  accessToken: string | null;
 }
 
 type Tab = 'overview' | 'users' | 'groups';
@@ -18,7 +19,7 @@ const API_BASE =
   import.meta.env.VITE_API_BASE ||
   '/api';
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) => {
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, accessToken }) => {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [users, setUsers] = useState<User[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -102,9 +103,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
     expirationDate: raw.expiration_date || null,
   });
 
+  const withAuth = (init: RequestInit = {}): RequestInit => ({
+    ...init,
+    headers: {
+      ...(init.headers || {}),
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+    }
+  });
+
   const loadGroups = async () => {
     try {
-      const response = await fetch(`${API_BASE}/groups`);
+      const response = await fetch(`${API_BASE}/groups`, withAuth());
       if (!response.ok) throw new Error('Impossible de récupérer les groupes');
       const data = await response.json();
       const mapped = (data as any[]).map(mapGroup);
@@ -123,7 +132,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
   const loadUsers = async (groupData?: Group[]) => {
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE}/users`);
+      const response = await fetch(`${API_BASE}/users`, withAuth());
       if (!response.ok) throw new Error('Impossible de récupérer les utilisateurs');
       const data = await response.json();
       const lookup = Object.fromEntries((groupData ?? groups).map((g) => [g.id, g]));
@@ -173,11 +182,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
     const newStatus: UserStatus = target.status === 'active' ? 'inactive' : 'active';
 
     try {
-      const response = await fetch(`${API_BASE}/users/${userId}`, {
+      const response = await fetch(`${API_BASE}/users/${userId}`, withAuth({
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
-      });
+      }));
       if (!response.ok) throw new Error('Mise à jour du statut impossible');
       setUsers(users.map((u) => (u.id === userId ? { ...u, status: newStatus } : u)));
     } catch (err) {
@@ -190,7 +199,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
     if (!confirm('Êtes-vous sûr de vouloir supprimer définitivement cet utilisateur ?')) return;
 
     try {
-      const response = await fetch(`${API_BASE}/users/${userId}`, { method: 'DELETE' });
+      const response = await fetch(`${API_BASE}/users/${userId}`, withAuth({ method: 'DELETE' }));
       if (!response.ok) throw new Error('Suppression échouée');
       setUsers(users.filter((u) => u.id !== userId));
     } catch (err) {
@@ -221,11 +230,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
     };
 
     try {
-      const response = await fetch(`${API_BASE}/users`, {
+      const response = await fetch(`${API_BASE}/users`, withAuth({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      });
+      }));
       if (!response.ok) throw new Error('Création impossible');
       const created = await response.json();
       setUsers([...users, mapUser(created)]);
@@ -241,7 +250,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
 
   const loadPatientStats = async () => {
     try {
-      const response = await fetch(`${API_BASE}/patients`);
+      const response = await fetch(`${API_BASE}/patients`, withAuth());
       if (!response.ok) throw new Error('Impossible de récupérer les patients');
       const data = await response.json();
       const casted = data as Patient[];
@@ -255,7 +264,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
 
   const refreshHealth = async () => {
     try {
-      const response = await fetch(`${API_BASE}/health`);
+      const response = await fetch(`${API_BASE}/health`, withAuth());
       const ok = response.ok;
       setSystemHealth((prev) => ({
         ...prev,
@@ -292,11 +301,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
     };
 
     try {
-      const response = await fetch(`${API_BASE}/users/${editingUser.id}`, {
+      const response = await fetch(`${API_BASE}/users/${editingUser.id}`, withAuth({
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      });
+      }));
       if (!response.ok) throw new Error('Mise à jour impossible');
       const updated = await response.json();
       setUsers(users.map((u) => (u.id === editingUser.id ? mapUser(updated) : u)));
@@ -311,11 +320,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
     if (!editingUser) return;
     const tempPass = Math.random().toString(36).slice(-8).toUpperCase();
     try {
-      const response = await fetch(`${API_BASE}/users/${editingUser.id}`, {
+      const response = await fetch(`${API_BASE}/users/${editingUser.id}`, withAuth({
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: tempPass }),
-      });
+      }));
       if (!response.ok) throw new Error('Reset impossible');
       alert(`Réinitialisation effectuée.\n\nNouveau mot de passe temporaire : ${tempPass}\n\nVeuillez le transmettre à l'utilisateur de manière sécurisée.`);
     } catch (err) {
@@ -342,11 +351,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
         ? `${API_BASE}/groups`
         : `${API_BASE}/groups/${editingGroup.id}`;
       const method = isCreatingGroup ? 'POST' : 'PUT';
-      const response = await fetch(url, {
+      const response = await fetch(url, withAuth({
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      });
+      }));
       if (!response.ok) throw new Error('Sauvegarde impossible');
       const saved = mapGroup(await response.json());
       if (isCreatingGroup) {
@@ -366,7 +375,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
     if (!confirm('Supprimer ce groupe ? Les utilisateurs associés seront détachés.')) return;
 
     try {
-      const response = await fetch(`${API_BASE}/groups/${groupId}`, { method: 'DELETE' });
+      const response = await fetch(`${API_BASE}/groups/${groupId}`, withAuth({ method: 'DELETE' }));
       if (!response.ok) throw new Error('Suppression impossible');
       setGroups(groups.filter((g) => g.id !== groupId));
       setEditingGroup(null);
