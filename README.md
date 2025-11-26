@@ -1,29 +1,54 @@
 # Preview DICOM – Stack de démonstration
 
-Cette base propose une maquette d'infrastructure pour un portail DICOM :
+## Titre
+Portail de prévisualisation DICOM complet (frontend React, backend FastAPI, Orthanc + OHIF, orchestration Docker).
 
-- **Front** : React/Vite (ce dépôt) pour la connexion, le dashboard patient et l'admin UI.
-- **Back** : FastAPI + SQLAlchemy, connecté à PostgreSQL (patients, utilisateurs, groupes/droits).
-- **DICOM** : Orthanc avec DICOMweb activé, et un viewer OHIF pré-configuré via Docker.
-- **Infra** : Docker / docker-compose, Nginx en frontal pour router /api (backend), /viewer (OHIF) et le site (frontend).
+## Description
+Cette base fournit une maquette d'infrastructure pour tester rapidement un portail DICOM. Elle rassemble un frontend React/Vite, un backend FastAPI connecté à PostgreSQL, un Orthanc exposé en DICOMweb, un viewer OHIF déjà configuré et un reverse-proxy Nginx pour rassembler le tout sur un seul point d'entrée.
 
-## Lancer la stack
+## Objectif
+Offrir une stack clé en main pour :
+- Explorer une architecture DICOM moderne sans repartir de zéro.
+- Développer une UI patient/admin branchée sur une API minimale.
+- Vérifier l'intégration DICOMweb entre Orthanc et OHIF.
 
-```bash
-docker-compose up --build
+## Fonctionnalités principales
+- **Frontend React/Vite** : écrans de connexion, tableau de bord patient et interfaces d'administration (maquettes).  
+- **API FastAPI** : CRUD basique sur patients, utilisateurs et groupes, connexion PostgreSQL via SQLAlchemy.  
+- **Stockage DICOM** : Orthanc avec DICOMweb activé et listener DICOM (4242).  
+- **Visualisation** : Viewer OHIF pré-configuré pour interroger Orthanc.  
+- **Proxy unifié** : Nginx sert le frontend, relaye l'API (`/api`) et expose le viewer (`/viewer`).
+
+## Technologies
+- **Frontend** : React 18, Vite.  
+- **Backend** : FastAPI, SQLAlchemy, PostgreSQL.  
+- **DICOM** : Orthanc (DICOMweb), OHIF Viewer.  
+- **Infra** : Docker, docker-compose, Nginx.
+
+## Architecture générale
+```
+Utilisateur → Nginx (port 80)
+  ├─ /           → Frontend React (Vite)
+  ├─ /api        → Backend FastAPI + PostgreSQL
+  └─ /viewer     → OHIF Viewer → Orthanc (REST/DICOMweb, port 8042)
+                         └─ Listener DICOM C-STORE (port 4242)
 ```
 
-Endpoints :
+## Installation et lancement
+1. **Prérequis** : Docker et docker-compose installés.  
+2. **Configurer l'environnement** : 
+   - Copier `.env.example` en `.env` si besoin et ajuster les variables Postgres/ports.  
+3. **Démarrer la stack** :
+   ```bash
+   docker-compose up --build
+   ```
+4. **Accéder aux services** :
+   - Frontend : http://localhost  
+   - API FastAPI : http://localhost/api (ou http://localhost:8000 en direct)  
+   - OHIF Viewer : http://localhost/viewer (ou http://localhost:3000 en direct)  
+   - Orthanc : http://localhost:8042 (REST/DICOMweb), listener DICOM C-STORE : 4242
 
-- Frontend : http://localhost (via Nginx)
-- API FastAPI : http://localhost/api (ou http://localhost:8000 en direct)
-- OHIF Viewer : http://localhost/viewer (ou http://localhost:3000 en direct)
-- Orthanc : REST/DICOMweb http://localhost:8042, DICOM listener : 4242
-
-Les variables par défaut sont définies dans `.env.example` et injectées dans les services Docker. Vous pouvez les surcharger ou créer un fichier `.env`.
-
-## Structure principale
-
+## Structure du dépôt
 ```
 .
 ├─ App.tsx / components/     # UI React (login, dashboard patient/admin)
@@ -42,15 +67,13 @@ Les variables par défaut sont définies dans `.env.example` et injectées dans 
 └─ .env.example              # Variables Postgres
 ```
 
-## Notes d'exploitation
+## Explications supplémentaires
+- **Initialisation des tables** : les modèles SQLAlchemy sont créés au démarrage du backend (voir `backend/app/main.py`).
+- **API minimale** : les routes `/patients`, `/users`, `/groups` exposent un CRUD simple basé sur les schémas Pydantic (`backend/app/schemas.py`).
+- **Connexion OHIF → Orthanc** : le viewer pointe sur Orthanc via DICOMweb configuré dans `infra/ohif-config.js`.
+- **Personnalisation Nginx** : adaptez les hôtes ou chemins dans `infra/nginx.conf` si vous déployez derrière un autre reverse-proxy.
 
-- La base crée automatiquement les tables au démarrage (voir `backend/app/main.py`).
-- Les routes `/patients`, `/users`, `/groups` fournissent un CRUD minimal pour brancher rapidement l'UI (voir `backend/app/schemas.py`).
-- Orthanc expose DICOMweb (`/dicom-web`), et OHIF est déjà pointé dessus via `infra/ohif-config.js`.
-- Nginx reverse-proxy tout sur le port 80; vous pouvez adapter les hostnames dans `infra/nginx.conf` si déployé derrière un autre LB.
-
-## Prochaines étapes possibles
-
-- Connecter le frontend à l'API `/api` (auth réelle, upload DICOM, permissions groupe).
-- Sécuriser Orthanc (auth Basic/ JWT) et ajouter du stockage persistant dédié.
-- Ajouter un module d'import DICOM vers Orthanc (REST/DICOM C-STORE) côté backend.
+## Prochaines étapes proposées
+- Brancher le frontend sur `/api` pour l'authentification, l'import DICOM et la gestion fine des permissions.
+- Sécuriser Orthanc (auth Basic ou JWT) et ajouter du stockage persistant dédié.
+- Ajouter un module d'import DICOM vers Orthanc (REST ou DICOM C-STORE) côté backend.
