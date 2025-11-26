@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Users,
   ChevronRight, 
@@ -20,6 +21,7 @@ import {
 import { Logo } from './Logo';
 import { User, Patient, ViewState } from '../types';
 import { DicomViewer } from './DicomViewer';
+import { useAuth } from '../contexts/AuthContext';
 
 const API_BASE =
   import.meta.env.VITE_API_URL ||
@@ -27,13 +29,11 @@ const API_BASE =
   '/api';
 
 interface PatientDashboardProps {
-  user: User;
-  accessToken: string | null;
-  onLogout: () => void;
   onNavigate: (view: ViewState) => void;
 }
 
-export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, accessToken, onLogout, onNavigate }) => {
+export const PatientDashboard: React.FC<PatientDashboardProps> = ({ onNavigate }) => {
+  const { user, accessToken, logout } = useAuth();
   const [patients, setPatients] = useState<Patient[]>([]);
   const [selectedPatientId, setSelectedPatientId] = useState<string>('');
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
@@ -50,6 +50,10 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, access
   // Edit Mode State
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<Patient | null>(null);
+
+  if (!user) {
+    return null;
+  }
 
   const withAuth = (init: RequestInit = {}): RequestInit => ({
     ...init,
@@ -111,42 +115,45 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, access
     }
   };
 
-  useEffect(() => {
-    const fetchPatients = async () => {
-      setIsLoading(true);
-      setError('');
-      try {
-        const response = await fetch(`${API_BASE}/patients`, withAuth());
-        if (!response.ok) {
-          throw new Error('Erreur lors du chargement des patients');
-        }
+  const queryClient = useQueryClient();
 
-        const data = await response.json();
-        const mappedPatients: Patient[] = data.map((patient: any) => mapApiPatientToState(patient));
-
-        const patientsWithImages = await Promise.all(
-          mappedPatients.map(async (patient) => {
-            if (!patient.recordId) return patient;
-
-            const images = await fetchPatientImages(patient.recordId);
-            return { ...patient, images };
-          })
-        );
-
-        setPatients(patientsWithImages);
-        if (patientsWithImages.length > 0) {
-          setSelectedPatientId(patientsWithImages[0].id);
-        }
-      } catch (err) {
-        console.error(err);
-        setError('Impossible de récupérer les patients.');
-      } finally {
-        setIsLoading(false);
+  const patientsQuery = useQuery<Patient[]>({
+    queryKey: ['patients'],
+    enabled: Boolean(accessToken),
+    queryFn: async () => {
+      const response = await fetch(`${API_BASE}/patients`, withAuth({ credentials: 'include' }));
+      if (!response.ok) {
+        throw new Error('Erreur lors du chargement des patients');
       }
-    };
 
-    fetchPatients();
-  }, []);
+      const data = await response.json();
+      const mappedPatients: Patient[] = data.map((patient: any) => mapApiPatientToState(patient));
+
+      return Promise.all(
+        mappedPatients.map(async (patient) => {
+          if (!patient.recordId) return patient;
+          const images = await fetchPatientImages(patient.recordId);
+          return { ...patient, images };
+        })
+      );
+    },
+  });
+
+  useEffect(() => {
+    if (patientsQuery.data) {
+      setPatients(patientsQuery.data);
+      if (patientsQuery.data.length > 0) {
+        setSelectedPatientId(patientsQuery.data[0].id);
+      }
+    }
+  }, [patientsQuery.data]);
+
+  useEffect(() => {
+    setIsLoading(patientsQuery.isLoading);
+    if (patientsQuery.isError) {
+      setError('Impossible de récupérer les patients.');
+    }
+  }, [patientsQuery.isLoading, patientsQuery.isError]);
 
   useEffect(() => {
     // Reset edit mode when changing patient
@@ -424,7 +431,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, access
           <div className="h-8 w-8 bg-indigo-100 text-indigo-700 rounded-full flex items-center justify-center font-bold">
             {user.username.charAt(0).toUpperCase()}
           </div>
-          <button onClick={onLogout} className="text-slate-400 hover:text-red-500 transition-colors p-2" title="Déconnexion">
+          <button onClick={logout} className="text-slate-400 hover:text-red-500 transition-colors p-2" title="Déconnexion">
             <LogOut size={20} />
           </button>
         </div>
