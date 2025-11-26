@@ -9,6 +9,7 @@ export interface MedicalImage {
 
 export interface Patient {
   id: string;
+  recordId?: number;
   firstName: string;
   lastName: string;
   dob: string;
@@ -19,29 +20,32 @@ export interface Patient {
   images: MedicalImage[];
 }
 
-export type UserStatus = 'active' | 'inactive' | 'expired';
+export type UserStatus = 'active' | 'inactive' | 'expired' | 'disabled';
 
 export interface User {
-  id: string;
+  id: number;
   username: string;
   role: 'admin' | 'user';
   name: string;
-  email?: string;
-  group?: string; // e.g., 'Researchers', 'Interns'
-  status?: UserStatus;
+  email: string;
+  groupId?: number | null;
+  groupName?: string;
+  status: UserStatus;
   expirationDate?: string | null; // ISO Date string for temporary access
 }
 
+export interface GroupPermissions {
+  canEditPatients: boolean;
+  canExportData: boolean;
+  canManageUsers: boolean;
+  canViewImages: boolean;
+}
+
 export interface Group {
-  id: string;
+  id: number;
   name: string;
-  description: string;
-  permissions: {
-    canEditPatients: boolean;
-    canExportData: boolean;
-    canManageUsers: boolean;
-    canViewImages: boolean;
-  };
+  description?: string;
+  permissions: GroupPermissions;
 }
 
 export enum ViewState {
