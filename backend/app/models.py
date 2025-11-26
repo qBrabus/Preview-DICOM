@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -47,3 +47,15 @@ class Patient(Base):
 
     dicom_study_uid = Column(String, nullable=True)
     orthanc_patient_id = Column(String, nullable=True)
+    status = Column(String, default="À interpréter")
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    action = Column(String, nullable=False)
+    resource_id = Column(String, nullable=True)
+    resource_type = Column(String, nullable=True)
+    timestamp = Column(DateTime, nullable=False)

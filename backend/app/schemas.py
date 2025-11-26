@@ -69,6 +69,15 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class TokenPayload(BaseModel):
+    sub: int
+
+
 class PatientBase(BaseModel):
     external_id: str
     first_name: str
