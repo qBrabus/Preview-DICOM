@@ -100,6 +100,8 @@ def seed_initial_data():
                 group_id=admin_group.id,
             )
             db.add(admin_user)
+        elif not security.is_supported_password_hash(admin_user.hashed_password):
+            admin_user.hashed_password = security.get_password_hash("Admin123!")
 
         test_patient = db.query(models.Patient).filter(models.Patient.external_id == "patient_test_poc").first()
         if not test_patient:
