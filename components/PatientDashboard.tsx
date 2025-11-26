@@ -78,13 +78,29 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
   });
 
   // Derived state for searching
-  const filteredPatients = patients.filter(p => 
-    p.lastName.toLowerCase().includes(searchQuery.toLowerCase()) || 
+  const filteredPatients = patients.filter(p =>
+    p.lastName.toLowerCase().includes(searchQuery.toLowerCase()) ||
     p.firstName.toLowerCase().includes(searchQuery.toLowerCase()) ||
     p.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId);
+
+  const fetchPatientImages = async (recordId?: number) => {
+    if (!recordId) return [] as Patient['images'];
+
+    try {
+      const imagesResponse = await fetch(`${API_BASE}/patients/${recordId}/images`);
+      if (!imagesResponse.ok) {
+        throw new Error('Impossible de récupérer les images DICOM');
+      }
+
+      return await imagesResponse.json();
+    } catch (imageError) {
+      console.error(imageError);
+      return [] as Patient['images'];
+    }
+  };
 
   useEffect(() => {
     const fetchPatients = async () => {
@@ -103,18 +119,8 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
           mappedPatients.map(async (patient) => {
             if (!patient.recordId) return patient;
 
-            try {
-              const imagesResponse = await fetch(`${API_BASE}/patients/${patient.recordId}/images`);
-              if (!imagesResponse.ok) {
-                throw new Error('Impossible de récupérer les images DICOM');
-              }
-
-              const images = await imagesResponse.json();
-              return { ...patient, images };
-            } catch (imageError) {
-              console.error(imageError);
-              return patient;
-            }
+            const images = await fetchPatientImages(patient.recordId);
+            return { ...patient, images };
           })
         );
 
@@ -183,11 +189,32 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
     if (idsToExport.length === 0) return;
 
     const patientsToExport = patients.filter(p => idsToExport.includes(p.id));
-    
+
+    if (patientsToExport.length === 1 && patientsToExport[0].recordId) {
+      const patient = patientsToExport[0];
+      fetch(`${API_BASE}/patients/${patient.recordId}/export`)
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error('Échec de l\'export du dossier patient');
+          }
+          return response.blob();
+        })
+        .then((blob) => {
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `Patient-${patient.id}.zip`;
+          link.click();
+          URL.revokeObjectURL(url);
+        })
+        .catch(() => setError('Impossible d\'exporter ce patient.'));
+      return;
+    }
+
     const dataStr = JSON.stringify(patientsToExport, null, 2);
     const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-    
-    const exportFileDefaultName = idsToExport.length === 1 
+
+    const exportFileDefaultName = idsToExport.length === 1
       ? `${patientsToExport[0].lastName}_${patientsToExport[0].firstName}_dossier.json`
       : `export_patients_imagine_${idsToExport.length}.json`;
 
@@ -248,14 +275,6 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
           if (!patientData.id || !patientData.lastName) continue;
           if (currentIds.has(patientData.id)) continue;
 
-          const dicomImages = dicomFiles.map((file) => ({
-            id: file.name,
-            url: URL.createObjectURL(file),
-            description: 'Image DICOM importée',
-            date: new Date().toISOString().split('T')[0],
-            file,
-          }));
-
           const payload = {
             external_id: patientData.id,
             first_name: patientData.firstName,
@@ -281,7 +300,18 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
           }
 
           const savedPatient = await response.json();
-          importedPatients.push(mapApiPatientToState(savedPatient, dicomImages));
+          const persistedImages = await fetchPatientImages(savedPatient.id);
+          const fallbackImages = dicomFiles.map((file) => ({
+            id: file.name,
+            url: URL.createObjectURL(file),
+            description: 'Image DICOM importée',
+            date: new Date().toISOString().split('T')[0],
+            file,
+          }));
+
+          importedPatients.push(
+            mapApiPatientToState(savedPatient, persistedImages.length ? persistedImages : fallbackImages),
+          );
           currentIds.add(patientData.id);
         }
       } catch (err) {

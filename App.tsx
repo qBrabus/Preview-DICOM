@@ -44,6 +44,7 @@ const App: React.FC = () => {
 
   const handleNavigate = (view: ViewState) => {
     setCurrentView(view);
+    localStorage.setItem('previewdcm:view', view);
   };
 
   // Render logic based on state
