@@ -153,18 +153,12 @@ def login(credentials: schemas.LoginRequest, response: Response, db: Session = D
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=int(settings.refresh_token_ttl.total_seconds()),
+        **settings.refresh_cookie_params,
     )
     response.set_cookie(
         key="csrf_token",
         value=csrf_token,
-        httponly=False,
-        secure=True,
-        samesite="strict",
-        max_age=int(settings.refresh_token_ttl.total_seconds()),
+        **settings.csrf_cookie_params,
     )
     _ = user.group
     return {
@@ -199,18 +193,12 @@ def refresh_token(
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=int(settings.refresh_token_ttl.total_seconds()),
+        **settings.refresh_cookie_params,
     )
     response.set_cookie(
         key="csrf_token",
         value=csrf_token,
-        httponly=False,
-        secure=True,
-        samesite="strict",
-        max_age=int(settings.refresh_token_ttl.total_seconds()),
+        **settings.csrf_cookie_params,
     )
     _ = user.group
     return {

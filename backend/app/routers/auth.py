@@ -27,10 +27,7 @@ def login(
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=int(settings.refresh_token_ttl.total_seconds()),
+        **settings.refresh_cookie_params,
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -56,9 +53,6 @@ def refresh_token(
     response.set_cookie(
         key="refresh_token",
         value=token,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=int(settings.refresh_token_ttl.total_seconds()),
+        **settings.refresh_cookie_params,
     )
     return {"access_token": access_token, "token_type": "bearer"}

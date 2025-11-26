@@ -15,7 +15,7 @@ interface AuthContextValue {
   csrfToken: string | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
-  refresh: () => Promise<void>;
+  refresh: (showLoading?: boolean) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -64,27 +64,39 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
     setView(mappedUser.role === 'admin' ? ViewState.ADMIN_DASHBOARD : ViewState.USER_DASHBOARD);
   };
 
-  const refresh = async () => {
-    const csrf = csrfToken || getCsrfFromCookie();
-    const response = await fetch(`${API_BASE}/auth/refresh`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: csrf ? { 'X-CSRF-Token': csrf } : undefined,
-    });
+  const refresh = async (showLoading = false) => {
+    if (showLoading) {
+      setIsLoading(true);
+    }
 
-    if (!response.ok) {
+    try {
+      const csrf = csrfToken || getCsrfFromCookie();
+      const response = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrf ? { 'X-CSRF-Token': csrf } : undefined,
+      });
+
+      if (!response.ok) {
+        throw new Error('Impossible de rafraîchir la session');
+      }
+
+      const data = await response.json();
+      const mappedUser = mapUser(data.user);
+      setUser(mappedUser);
+      setAccessToken(data.access_token);
+      setCsrfToken(data.csrf_token);
+      setView(mappedUser.role === 'admin' ? ViewState.ADMIN_DASHBOARD : ViewState.USER_DASHBOARD);
+    } catch (error) {
+      console.error(error);
       setUser(null);
       setAccessToken(null);
       setView(ViewState.LOGIN);
-      return;
+    } finally {
+      if (showLoading) {
+        setIsLoading(false);
+      }
     }
-
-    const data = await response.json();
-    const mappedUser = mapUser(data.user);
-    setUser(mappedUser);
-    setAccessToken(data.access_token);
-    setCsrfToken(data.csrf_token);
-    setView(mappedUser.role === 'admin' ? ViewState.ADMIN_DASHBOARD : ViewState.USER_DASHBOARD);
   };
 
   const logout = () => {
@@ -94,7 +106,7 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
   };
 
   useEffect(() => {
-    refresh().finally(() => setIsLoading(false));
+    refresh(true);
   }, []);
 
   return (
