@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date
 from typing import Optional
 
@@ -76,6 +78,10 @@ class Token(BaseModel):
 
 class TokenPayload(BaseModel):
     sub: int
+
+
+class AuthResponse(Token):
+    user: "UserRead"
 
 
 class PatientBase(BaseModel):

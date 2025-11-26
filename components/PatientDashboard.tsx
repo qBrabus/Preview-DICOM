@@ -28,11 +28,12 @@ const API_BASE =
 
 interface PatientDashboardProps {
   user: User;
+  accessToken: string | null;
   onLogout: () => void;
   onNavigate: (view: ViewState) => void;
 }
 
-export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogout, onNavigate }) => {
+export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, accessToken, onLogout, onNavigate }) => {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [selectedPatientId, setSelectedPatientId] = useState<string>('');
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
@@ -49,6 +50,14 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
   // Edit Mode State
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<Patient | null>(null);
+
+  const withAuth = (init: RequestInit = {}): RequestInit => ({
+    ...init,
+    headers: {
+      ...(init.headers || {}),
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+    }
+  });
 
   useEffect(() => {
     if (fileInputRef.current) {
@@ -90,7 +99,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
     if (!recordId) return [] as Patient['images'];
 
     try {
-      const imagesResponse = await fetch(`${API_BASE}/patients/${recordId}/images`);
+      const imagesResponse = await fetch(`${API_BASE}/patients/${recordId}/images`, withAuth());
       if (!imagesResponse.ok) {
         throw new Error('Impossible de récupérer les images DICOM');
       }
@@ -107,7 +116,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
       setIsLoading(true);
       setError('');
       try {
-        const response = await fetch(`${API_BASE}/patients`);
+        const response = await fetch(`${API_BASE}/patients`, withAuth());
         if (!response.ok) {
           throw new Error('Erreur lors du chargement des patients');
         }
@@ -192,7 +201,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
 
     if (patientsToExport.length === 1 && patientsToExport[0].recordId) {
       const patient = patientsToExport[0];
-      fetch(`${API_BASE}/patients/${patient.recordId}/export`)
+      fetch(`${API_BASE}/patients/${patient.recordId}/export`, withAuth())
         .then((response) => {
           if (!response.ok) {
             throw new Error('Échec de l\'export du dossier patient');
@@ -290,10 +299,13 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
           formData.append('patient', JSON.stringify(payload));
           dicomFiles.forEach((file) => formData.append('dicom_files', file));
 
-          const response = await fetch(`${API_BASE}/patients/import`, {
-            method: 'POST',
-            body: formData,
-          });
+          const response = await fetch(
+            `${API_BASE}/patients/import`,
+            withAuth({
+              method: 'POST',
+              body: formData,
+            }),
+          );
 
           if (!response.ok) {
             throw new Error(`Import patient ${patientData.id} failed: ${response.status}`);
@@ -341,7 +353,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ user, onLogo
         const requests = idsToDelete.map((patientId) => {
             const patient = patients.find((p) => p.id === patientId);
             if (!patient?.recordId) return Promise.resolve({ ok: false });
-            return fetch(`${API_BASE}/patients/${patient.recordId}`, { method: 'DELETE' });
+            return fetch(`${API_BASE}/patients/${patient.recordId}`, withAuth({ method: 'DELETE' }));
         });
 
         Promise.all(requests).then((responses) => {

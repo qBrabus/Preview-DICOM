@@ -9,7 +9,7 @@ const API_BASE =
   '/api';
 
 interface LoginProps {
-  onLogin: (user: User) => void;
+  onLogin: (user: User, token: string) => void;
   onNavigate: (view: ViewState) => void;
 }
 
@@ -51,17 +51,18 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       const data = await response.json();
 
       const authenticatedUser: User = {
-        id: data.id || 0,
-        username: data.email,
-        role: data.role === 'admin' ? 'admin' : 'user',
-        name: data.full_name,
-        email: data.email,
-        groupId: data.group?.id,
-        groupName: data.group?.name,
-        status: data.status || 'active'
+        id: data.user.id,
+        username: data.user.email,
+        role: data.user.role === 'admin' ? 'admin' : 'user',
+        name: data.user.full_name,
+        email: data.user.email,
+        groupId: data.user.group?.id,
+        groupName: data.user.group?.name,
+        status: data.user.status || 'active',
+        expirationDate: data.user.expiration_date
       };
 
-      onLogin(authenticatedUser);
+      onLogin(authenticatedUser, data.access_token);
     } catch (err) {
       console.error(err);
       setError('Impossible de contacter le serveur.');

@@ -41,6 +41,31 @@ wait_for_db()
 Base.metadata.create_all(bind=engine)
 
 
+def ensure_schema_upgrades():
+    """Apply minimal, idempotent upgrades for existing databases."""
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                ALTER TABLE patients
+                ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'À interpréter'
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE patients
+                SET status = COALESCE(status, 'À interpréter')
+                """
+            )
+        )
+
+
+ensure_schema_upgrades()
+
+
 def seed_initial_data():
     """
     Ensure the platform has a default administrator account and a test patient
@@ -87,6 +112,7 @@ def seed_initial_data():
                 last_visit="2024-01-01",
                 dicom_study_uid=None,
                 orthanc_patient_id=None,
+                status="À interpréter",
             )
             db.add(test_patient)
 
@@ -112,7 +138,7 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.post("/auth/login", response_model=schemas.Token, tags=["auth"])
+@app.post("/auth/login", response_model=schemas.AuthResponse, tags=["auth"])
 def login(credentials: schemas.LoginRequest, response: Response, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == credentials.email).first()
     if not user or not security.verify_password(credentials.password, user.hashed_password):
@@ -128,10 +154,11 @@ def login(credentials: schemas.LoginRequest, response: Response, db: Session = D
         samesite="lax",
         max_age=int(settings.refresh_token_ttl.total_seconds()),
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    _ = user.group
+    return {"access_token": access_token, "token_type": "bearer", "user": user}
 
 
-@app.post("/auth/refresh", response_model=schemas.Token, tags=["auth"])
+@app.post("/auth/refresh", response_model=schemas.AuthResponse, tags=["auth"])
 def refresh_token(response: Response, request: Request, db: Session = Depends(get_db)):
     refresh_token = request.cookies.get("refresh_token")
     if not refresh_token:
@@ -154,7 +181,8 @@ def refresh_token(response: Response, request: Request, db: Session = Depends(ge
         samesite="lax",
         max_age=int(settings.refresh_token_ttl.total_seconds()),
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    _ = user.group
+    return {"access_token": access_token, "token_type": "bearer", "user": user}
 
 
 @app.post("/groups", response_model=schemas.GroupRead, tags=["groups"])
