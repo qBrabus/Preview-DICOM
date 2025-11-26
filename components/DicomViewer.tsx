@@ -30,7 +30,10 @@ export const DicomViewer: React.FC<DicomViewerProps> = ({ image }) => {
         if (image.file) {
           imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(image.file);
         } else {
-          imageId = `wadouri:${image.url}`;
+          const absoluteUrl = image.url.startsWith('http')
+            ? image.url
+            : `${window.location.origin}${image.url}`;
+          imageId = `wadouri:${absoluteUrl}`;
         }
 
         const loadedImage = await cornerstone.loadAndCacheImage(imageId);
