@@ -13,18 +13,18 @@ graph TD
     Client[Navigateur Client]
     
     subgraph "Docker Host"
-        Nginx[Nginx Reverse Proxy\n(Port 80/443)]
+        Nginx["Nginx Reverse Proxy<br/>(Port 80/443)"]
         
         subgraph "Réseau Public"
-            Frontend[Frontend React\n(Vite Server)]
-            OHIF[OHIF Viewer\n(Visualiseur DICOM)]
+            Frontend["Frontend React<br/>(Vite Server)"]
+            OHIF["OHIF Viewer<br/>(Visualiseur DICOM)"]
         end
         
         subgraph "Réseau Privé"
-            Backend[Backend FastAPI\n(Python)]
-            Orthanc[Orthanc PACS\n(Serveur DICOM)]
-            Postgres[PostgreSQL\n(Base de Données)]
-            Redis[Redis\n(Cache & Sessions)]
+            Backend["Backend FastAPI<br/>(Python)"]
+            Orthanc["Orthanc PACS<br/>(Serveur DICOM)"]
+            Postgres["PostgreSQL<br/>(Base de Données)"]
+            Redis["Redis<br/>(Cache & Sessions)"]
         end
     end
 
