@@ -11,7 +11,7 @@ class OrthancClient:
             auth = (settings.orthanc_username, settings.orthanc_password)
         self._client = httpx.Client(base_url=settings.orthanc_url, auth=auth, timeout=30)
 
-    def list_instances(self, patient_id: str) -> list[str]:
+    def list_instances(self, patient_id: str) -> list[dict]:
         try:
             response = self._client.get(f"/patients/{patient_id}/instances")
             response.raise_for_status()
@@ -21,7 +21,7 @@ class OrthancClient:
 
     def instance_metadata(self, instance_id: str) -> dict:
         try:
-            response = self._client.get(f"/instances/{instance_id}")
+            response = self._client.get(f"/instances/{instance_id}/tags")
             response.raise_for_status()
             return response.json()
         except httpx.HTTPError:
@@ -53,6 +53,32 @@ class OrthancClient:
             response.raise_for_status()
         except httpx.HTTPError:
             raise HTTPException(status_code=502, detail="Impossible de supprimer le patient Orthanc")
+
+    def delete_instance(self, instance_id: str) -> None:
+        try:
+            response = self._client.delete(f"/instances/{instance_id}")
+            response.raise_for_status()
+        except httpx.HTTPError:
+            raise HTTPException(status_code=502, detail="Impossible de supprimer l'instance Orthanc")
+
+    def modify_patient(self, patient_id: str, payload: dict) -> dict:
+        try:
+            # /patients/{id}/modify returns the ID of the new patient
+            response = self._client.post(f"/patients/{patient_id}/modify", json=payload)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPError as e:
+            print(f"Error modifying patient: {e}", flush=True)
+            raise HTTPException(status_code=502, detail="Impossible de modifier le patient Orthanc")
+
+    def modify_instance(self, instance_id: str, payload: dict) -> bytes:
+        try:
+            response = self._client.post(f"/instances/{instance_id}/modify", json=payload)
+            response.raise_for_status()
+            return response.content
+        except httpx.HTTPError as e:
+            print(f"Error modifying instance: {e}", flush=True)
+            raise HTTPException(status_code=502, detail="Impossible de modifier l'instance Orthanc")
 
     def close(self):
         self._client.close()

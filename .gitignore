@@ -12,6 +12,18 @@ dist
 dist-ssr
 *.local
 
+# Environment variables
+.env
+
+# Python
+__pycache__
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.coverage
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

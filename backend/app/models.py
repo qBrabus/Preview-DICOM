@@ -59,3 +59,29 @@ class AuditLog(Base):
     resource_id = Column(String, nullable=True)
     resource_type = Column(String, nullable=True)
     timestamp = Column(DateTime, nullable=False)
+
+
+class RevokedToken(Base):
+    """JWT tokens that have been revoked before expiration"""
+    __tablename__ = "revoked_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    jti = Column(String, unique=True, nullable=False, index=True)  # JWT ID
+    token_type = Column(String, nullable=False)  # 'access' or 'refresh'
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    revoked_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+
+class UserSession(Base):
+    """Track user sessions for multi-device support"""
+    __tablename__ = "user_sessions"
+
+    id = Column(String, primary_key=True)  # Session ID
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    device_info = Column(String, nullable=True)
+    ip_address = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    last_activity = Column(DateTime, nullable=False)
+    is_active = Column(Boolean, default=True)

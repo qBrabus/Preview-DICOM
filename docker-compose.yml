@@ -2,10 +2,12 @@ services:
   db:
     image: postgres:15
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: preview_dicom
-      POSTGRES_PASSWORD: preview_dicom
-      POSTGRES_DB: preview_dicom
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -20,19 +22,26 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: preview_dicom
-      POSTGRES_PASSWORD: preview_dicom
-      POSTGRES_DB: preview_dicom
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
-      ORTHANC_USER: admin
-      ORTHANC_PASSWORD: changeme
-      # Clé fixe pour persister les sessions entre les redémarrages
-      SECRET_KEY: "la-cle-secrete-super-securisee-pour-le-poc-imagine"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      ORTHANC_USER: ${ORTHANC_USER}
+      ORTHANC_PASSWORD: ${ORTHANC_PASSWORD}
+      ORTHANC_URL: ${ORTHANC_URL}
+      SECRET_KEY: ${SECRET_KEY}
+      COOKIE_SECURE: ${COOKIE_SECURE}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
     ports:
       - "8000:8000"
     networks:
@@ -43,8 +52,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+    env_file:
+      - .env
     environment:
-      VITE_API_BASE: /api
+      VITE_API_BASE: ${VITE_API_BASE}
     depends_on:
       - backend
     ports:
@@ -52,16 +63,31 @@ services:
     networks:
       - public
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - private
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   orthanc:
     image: osimis/orthanc:22.11.2
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       ORTHANC__NAME: "Preview DICOM"
       ORTHANC__REMOTEACCESS_ALLOWED: "true"
       ORTHANC__DICOM_WEB__ENABLE: "true"
       ORTHANC__DICOM_WEB__ROOT: "/dicom-web/"
       ORTHANC__AUTHENTICATION_ENABLED: "true"
-      ORTHANC__REGISTERED_USERS__admin: "changeme"
+      ORTHANC__REGISTERED_USERS__admin: ${ORTHANC_PASSWORD}
     volumes:
       - orthanc-storage:/var/lib/orthanc/db
     networks:

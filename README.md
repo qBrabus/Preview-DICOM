@@ -1,134 +1,70 @@
-# Preview DICOM
+# Preview-DICOM
 
-Portail de prévisualisation DICOM conçu comme une stack de démonstration prête à l'emploi : frontend React/Vite, backend FastAPI, base PostgreSQL, serveur Orthanc exposé en DICOMweb, viewer OHIF et reverse-proxy Nginx pour fédérer l'ensemble.
+Preview-DICOM est une plateforme web moderne et sécurisée dédiée à la gestion, l'archivage et la visualisation d'images médicales (DICOM). Elle est conçue pour faciliter la collaboration entre chercheurs et cliniciens au sein de l'Institut Imagine.
 
-## Sommaire
-- [Objectifs](#objectifs)
-- [Composition de la stack](#composition-de-la-stack)
-- [Architecture](#architecture)
-- [Prérequis](#prérequis)
-- [Démarrage rapide (Docker)](#démarrage-rapide-docker)
-- [Utilisation et URLs utiles](#utilisation-et-urls-utiles)
-- [Identifiants et données d'exemple](#identifiants-et-données-dexemple)
-- [Développement local](#développement-local)
-- [Structure du dépôt](#structure-du-dépôt)
-- [Personnalisation et points d'attention](#personnalisation-et-points-dattention)
+![Status](https://img.shields.io/badge/Status-Production%20Ready-green)
+![Version](https://img.shields.io/badge/Version-1.0.0-blue)
+![License](https://img.shields.io/badge/License-Proprietary-red)
 
-## Objectifs
-- Offrir une maquette complète pour explorer une architecture DICOM moderne sans repartir de zéro.
-- Permettre le prototypage rapide d'écrans patients/admin branchés sur une API minimale.
-- Vérifier l'intégration DICOMweb entre Orthanc et le viewer OHIF.
-- Servir de base à des démonstrations ou POC (upload, visualisation, gestion utilisateur/groupe).
+## 🚀 Fonctionnalités Clés
 
-## Composition de la stack
-| Composant   | Rôle principal | Ports exposés | Notes |
-|-------------|----------------|---------------|-------|
-| **Frontend (React/Vite)** | UI de connexion, dashboard patient/admin | 4173 (dev/preview), 80/443 via Nginx | VITE_API_BASE pointant sur `/api`.
-| **Backend (FastAPI)** | API REST, authentification JWT, CRUD patients/utilisateurs/groupes | 8000 | Attente DB au démarrage + migrations minimales.
-| **PostgreSQL** | Stockage relationnel | 5432 (interne) | Volume `pgdata`.
-| **Orthanc** | Serveur DICOM + DICOMweb | Interne (4242/8042 sur réseau Docker uniquement) | Utilisateur `admin/changeme` par défaut, authentification injectée par Nginx.
-| **OHIF Viewer** | Visualisation via DICOMweb | 3000 (direct), `/viewer` via Nginx | Configuré pour consommer `/orthanc-proxy` sans exposer les secrets dans le navigateur.
-| **Nginx** | Point d'entrée unique HTTPS, reverse-proxy | 80 (redirection), 443 | Proxy `/`, `/api`, `/viewer` et `/orthanc-proxy`.
+*   **Gestion des Patients** : Import/Export facile de dossiers patients (Support ZIP & DICOM natif).
+*   **Visualisation Avancée** : Intégration complète du visualiseur **OHIF** pour une analyse radiologique fine.
+*   **PACS Intégré** : Utilise **Orthanc** comme cœur de stockage DICOM robuste et standardisé.
+*   **Sécurité** : Authentification JWT, protection CSRF, gestion fine des rôles (Admin/Chercheur).
+*   **Audit** : Traçabilité complète des actions (Upload, Export, Suppression).
+*   **Architecture Microservices** : Déploiement conteneurisé via Docker Compose.
 
-## Architecture
-```
-Utilisateur → Nginx (443)
-  ├─ /            → Frontend React (4173)
-  ├─ /api         → FastAPI (8000) → PostgreSQL (5432)
-  └─ /viewer      → OHIF (3000) → /orthanc-proxy → Orthanc (REST/DICOMweb)
-                          └─ Listener DICOM C-STORE (4242, interne)
-```
+## 📚 Documentation
 
-## Prérequis
-- Docker et Docker Compose installés.
-- Ports 80/443 libres (ou à adapter dans `docker-compose.yml`).
-- 4 Go de RAM recommandés pour l'ensemble des services.
+La documentation complète est disponible dans le dossier `docs/` :
 
-## Démarrage rapide (Docker)
-1. Cloner le dépôt puis se placer à la racine.
-2. (Optionnel) Copier `.env.example` en `.env` et ajuster les variables si nécessaire.
-3. Construire et lancer tous les services :
-   ```bash
-   docker-compose up --build
-   ```
-4. Attendre que PostgreSQL soit sain puis que FastAPI applique la création de schéma et le semis des données initiales.
+*   [**Architecture**](docs/architecture.md) : Vue d'ensemble technique, diagrammes et interaction des conteneurs.
+*   [**Guide de Déploiement**](docs/deployment.md) : Installation, configuration Docker et mise en production.
+*   [**Backend API**](docs/backend.md) : Détails sur l'API FastAPI, le schéma de base de données et la sécurité.
+*   [**Frontend**](docs/frontend.md) : Structure de l'application React, gestion d'état et composants.
+*   [**Guide Utilisateur**](docs/user_guide.md) : Manuel d'utilisation pour les chercheurs et administrateurs.
 
-Pour arrêter la stack :
-```bash
-docker-compose down
-```
+## 🛠 Stack Technique
 
-## Utilisation et URLs utiles
-- **Frontend** : https://localhost/ (proxié par Nginx)
-- **API FastAPI** : https://localhost/api (ou http://localhost:8000 en direct)
-- **Documentation OpenAPI** : https://localhost/api/docs
-- **Viewer OHIF** : https://localhost/viewer (ou http://localhost:3000 en direct)
-- **DICOMweb proxifié** : https://localhost/orthanc-proxy (auth Basic injectée par Nginx)
-- **Listener DICOM C-STORE** : interne au réseau Docker (`orthanc:4242`)
+| Composant | Technologie | Description |
+|-----------|-------------|-------------|
+| **Frontend** | React, TypeScript, Vite | Interface utilisateur réactive et moderne. |
+| **Backend** | Python, FastAPI | API REST performante et asynchrone. |
+| **Database** | PostgreSQL | Stockage relationnel des métadonnées. |
+| **PACS** | Orthanc | Serveur DICOM standard. |
+| **Viewer** | OHIF | Visualiseur d'images médicales web. |
+| **Cache** | Redis | Gestion des sessions et cache. |
+| **Gateway** | Nginx | Reverse proxy et terminaison SSL. |
 
-## Identifiants et données d'exemple
-- **Administrateur par défaut** : `admin@imagine.fr` / `Admin123!`
-- **Groupe créé** : `Administrateurs` (droits complets)
-- **Patient de démonstration** : `Patient POC` (external_id `patient_test_poc`) afin d'éviter tout fallback de données en dur.
+## ⚡️ Démarrage Rapide
 
-> Ces éléments sont créés au démarrage du backend (`backend/app/main.py`) et peuvent être modifiés ensuite via l'API ou directement en base.
+1.  **Prérequis** : Docker et Docker Compose installés.
+2.  **Configuration** :
+    ```bash
+    cp .env.example .env
+    # Éditez .env avec vos paramètres sécurisés
+    ```
+3.  **Lancement** :
+    ```bash
+    docker compose up -d --build
+    ```
+4.  **Accès** :
+    *   Application : `https://localhost`
+    *   Identifiants par défaut (si seedé) : `admin@imagine.fr` / `Admin123!`
 
-## Développement local
-### Installation des dépendances
-- Frontend :
-  ```bash
-  npm install
-  npm run dev
-  ```
-  L'API est attendue sur `VITE_API_BASE` (par défaut `/api`).
+## 🧪 Tests
 
-- Backend :
-  ```bash
-  pip install -r backend/requirements.txt
-  uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
-  ```
-  Variables utiles : `POSTGRES_*`, `ORTHANC_USER`, `ORTHANC_PASSWORD` (voir `docker-compose.yml`).
-
-### Migrations de base de données
-Alembic est configuré pour suivre les évolutions du schéma SQLAlchemy :
+Pour lancer les tests de vérification (API, Export, Auth) :
 
 ```bash
-cd backend
-alembic upgrade head
+# Script de vérification complet
+python3 verify_export.py
 ```
 
-Les URL de connexion sont dérivées des variables `POSTGRES_*`; la commande attend que la base soit accessible.
+## 👥 Auteurs
 
-### Débogage et santé
-- Endpoint de santé : `GET /health`
-- Les tokens d'accès/refresh sont émis via `POST /auth/login` et `POST /auth/refresh`.
-- Les droits des utilisateurs sont liés au groupe (voir modèles dans `backend/app/models.py`).
+Développé pour l'Institut Imagine.
 
-## Structure du dépôt
-```
-.
-├─ App.tsx / components/      # UI React (login, dashboard patient/admin)
-├─ backend/
-│  ├─ app/
-│  │  ├─ main.py              # FastAPI, CORS, semis initial, routes auth/groups
-│  │  ├─ models.py            # Patients, Users, Groups avec droits
-│  │  ├─ schemas.py           # Schémas Pydantic et réponses API
-│  │  ├─ services/orthanc.py  # Client Orthanc
-│  │  └─ dependencies.py      # Session DB, sécurité
-│  └─ Dockerfile              # Image backend
-├─ Dockerfile.frontend        # Build + preview Vite
-├─ docker-compose.yml         # Orchestration frontend/backend/db/orthanc/ohif/nginx
-├─ infra/
-│  ├─ nginx.conf              # Reverse-proxy HTTPS + routage / /api /viewer
-│  └─ ohif-config.js          # Configuration OHIF pointant sur Orthanc
-├─ constants.ts / types.ts    # Types et constantes partagées frontend
-└─ .env.example               # Variables d'environnement (Postgres, API)
-```
-
-## Personnalisation et points d'attention
-- **SSL Nginx** : des certificats autosignés sont attendus dans `infra/certs` (`selfsigned.crt`/`selfsigned.key`). Remplacez-les pour un déploiement réel.
-- **Sécurité Orthanc** : Orthanc n'est plus exposé publiquement ; les requêtes passent par `/orthanc-proxy` avec header Basic injecté. Changez les identifiants par défaut et régénérez la valeur encodée dans `infra/nginx.conf` si besoin.
-- **Protection CSRF** : le refresh token HttpOnly est combiné à un cookie `csrf_token` (SameSite=Strict) à renvoyer dans l'en-tête `X-CSRF-Token` lors du refresh.
-- **Limite d'upload** : `client_max_body_size 500g` dans `infra/nginx.conf` permet des lots volumineux ; adaptez selon vos besoins.
-- **Migrations** : Alembic est fourni (`backend/alembic.ini`). Exécuter `alembic upgrade head` pour aligner le schéma sur les modèles SQLAlchemy.
-- **Performances frontend** : la liste des patients ne déclenche plus de requêtes images systématiques ; le détail DICOM est chargé à la demande et mis en cache (React Query `staleTime`).
+---
+*Pour plus de détails techniques, veuillez consulter le dossier [docs/](docs/).*

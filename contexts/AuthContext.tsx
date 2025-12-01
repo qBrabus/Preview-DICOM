@@ -23,13 +23,48 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [view, setView] = useState<ViewState>(ViewState.LOGIN);
+  const [viewState, setViewState] = useState<ViewState>(ViewState.LOGIN);
   const [isLoading, setIsLoading] = useState(true);
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
 
   const getCsrfFromCookie = () => {
     const entry = document.cookie.split(';').find((cookie) => cookie.trim().startsWith('csrf_token='));
     return entry ? entry.split('=')[1] : null;
+  };
+
+  // Fonctions de persistance localStorage
+  const saveViewToStorage = (view: ViewState) => {
+    try {
+      localStorage.setItem('preview_dicom_view', view);
+    } catch (error) {
+      console.warn('Could not save view to localStorage:', error);
+    }
+  };
+
+  const loadViewFromStorage = (): ViewState | null => {
+    try {
+      const saved = localStorage.getItem('preview_dicom_view');
+      if (saved && Object.values(ViewState).includes(saved as ViewState)) {
+        return saved as ViewState;
+      }
+    } catch (error) {
+      console.warn('Could not load view from localStorage:', error);
+    }
+    return null;
+  };
+
+  const clearViewFromStorage = () => {
+    try {
+      localStorage.removeItem('preview_dicom_view');
+    } catch (error) {
+      console.warn('Could not clear view from localStorage:', error);
+    }
+  };
+
+  // Fonction setView avec sauvegarde automatique
+  const setView = (newView: ViewState) => {
+    setViewState(newView);
+    saveViewToStorage(newView);
   };
 
   const mapUser = (raw: any): User => ({
@@ -61,7 +96,8 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
     setUser(mappedUser);
     setAccessToken(data.access_token);
     setCsrfToken(data.csrf_token);
-    setView(mappedUser.role === 'admin' ? ViewState.ADMIN_DASHBOARD : ViewState.USER_DASHBOARD);
+    const defaultView = mappedUser.role === 'admin' ? ViewState.ADMIN_DASHBOARD : ViewState.USER_DASHBOARD;
+    setView(defaultView);
   };
 
   const refresh = async (showLoading = false) => {
@@ -86,12 +122,43 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
       setUser(mappedUser);
       setAccessToken(data.access_token);
       setCsrfToken(data.csrf_token);
-      setView(mappedUser.role === 'admin' ? ViewState.ADMIN_DASHBOARD : ViewState.USER_DASHBOARD);
+
+      // Restaurer la vue sauvegardée si compatible avec le rôle
+      const savedView = loadViewFromStorage();
+      let targetView: ViewState;
+
+      if (savedView && savedView !== ViewState.LOGIN) {
+        // Vérifier que la vue sauvegardée est compatible avec le rôle
+        const isAdminView = savedView === ViewState.ADMIN_DASHBOARD;
+        const isUserAdmin = mappedUser.role === 'admin';
+
+        if (isAdminView && isUserAdmin) {
+          // Admin peut voir ADMIN_DASHBOARD
+          targetView = savedView;
+        } else if (!isAdminView && savedView === ViewState.USER_DASHBOARD) {
+          // Tout le monde peut voir USER_DASHBOARD
+          targetView = savedView;
+        } else {
+          // Vue incompatible, utiliser la vue par défaut
+          targetView = mappedUser.role === 'admin' ? ViewState.ADMIN_DASHBOARD : ViewState.USER_DASHBOARD;
+        }
+      } else {
+        // Pas de vue sauvegardée, utiliser la vue par défaut
+        targetView = mappedUser.role === 'admin' ? ViewState.ADMIN_DASHBOARD : ViewState.USER_DASHBOARD;
+      }
+
+      setView(targetView);
     } catch (error) {
-      console.error(error);
+      console.error('[AuthContext] Refresh failed:', error);
+      console.error('[AuthContext] Error details:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        timestamp: new Date().toISOString()
+      });
       setUser(null);
       setAccessToken(null);
-      setView(ViewState.LOGIN);
+      setViewState(ViewState.LOGIN);
+      clearViewFromStorage();
     } finally {
       if (showLoading) {
         setIsLoading(false);
@@ -102,7 +169,8 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
   const logout = () => {
     setUser(null);
     setAccessToken(null);
-    setView(ViewState.LOGIN);
+    setViewState(ViewState.LOGIN);
+    clearViewFromStorage();
   };
 
   useEffect(() => {
@@ -111,7 +179,7 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
 
   return (
     <AuthContext.Provider
-      value={{ user, accessToken, csrfToken, isLoading, view, setView, login, logout, refresh }}
+      value={{ user, accessToken, csrfToken, isLoading, view: viewState, setView, login, logout, refresh }}
     >
       {children}
     </AuthContext.Provider>

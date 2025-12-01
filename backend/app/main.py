@@ -1,31 +1,37 @@
-import io
-import json
-import os
+"""
+Simplified FastAPI application with modular routers
+This replaces the monolithic main.py with a clean architecture
+"""
 import time
-import zipfile
 from datetime import datetime
-from typing import Iterator, List
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from sqlalchemy import text
 
-from . import models, schemas
-from .core import security
+from .database import Base, engine, SessionLocal
 from .core.config import settings
-from .database import Base, engine, get_db, SessionLocal
-from .dependencies import enforce_csrf
-from .services.orthanc import OrthancClient, get_orthanc_client
+from .core import security
+from .core.exceptions import app_exception_handler, AppException
+from . import models
 
-ORTHANC_URL = settings.orthanc_url
+# Import routers
+from .routers import auth, users, groups, patients, stats
 
-app = FastAPI(title="Preview DICOM Platform", version="0.1.0")
+# Initialize FastAPI
+app = FastAPI(
+    title="Preview DICOM Platform",
+    version="0.2.0",
+    description="Plateforme de prévisualisation DICOM avec gestion sécurisée"
+)
+
+# Exception handlers
+app.add_exception_handler(AppException, app_exception_handler)
+
 
 def wait_for_db(max_attempts: int = 10, delay_seconds: int = 2) -> None:
     """Wait for the database to accept connections before continuing startup."""
-
     for attempt in range(1, max_attempts + 1):
         try:
             with engine.connect() as connection:
@@ -37,15 +43,10 @@ def wait_for_db(max_attempts: int = 10, delay_seconds: int = 2) -> None:
             time.sleep(delay_seconds)
 
 
-# Initialize database tables and seed minimal data
-wait_for_db()
-Base.metadata.create_all(bind=engine)
-
-
 def ensure_schema_upgrades():
     """Apply minimal, idempotent upgrades for existing databases."""
-
     with engine.begin() as connection:
+        # Add status column if not exists
         connection.execute(
             text(
                 """
@@ -64,17 +65,14 @@ def ensure_schema_upgrades():
         )
 
 
-ensure_schema_upgrades()
-
-
 def seed_initial_data():
     """
     Ensure the platform has a default administrator account and a test patient
     so the application never falls back to hard-coded demo data.
     """
-
     db = SessionLocal()
     try:
+        # Create admin group
         admin_group = db.query(models.Group).filter(models.Group.name == "Administrateurs").first()
         if not admin_group:
             admin_group = models.Group(
@@ -89,6 +87,7 @@ def seed_initial_data():
             db.commit()
             db.refresh(admin_group)
 
+        # Create admin user
         admin_user = db.query(models.User).filter(models.User.email == "admin@imagine.fr").first()
         if not admin_user:
             hashed = security.get_password_hash("Admin123!")
@@ -104,7 +103,10 @@ def seed_initial_data():
         elif not security.is_supported_password_hash(admin_user.hashed_password):
             admin_user.hashed_password = security.get_password_hash("Admin123!")
 
-        test_patient = db.query(models.Patient).filter(models.Patient.external_id == "patient_test_poc").first()
+        # Create test patient
+        test_patient = db.query(models.Patient).filter(
+            models.Patient.external_id == "patient_test_poc"
+        ).first()
         if not test_patient:
             test_patient = models.Patient(
                 external_id="patient_test_poc",
@@ -124,485 +126,61 @@ def seed_initial_data():
         db.close()
 
 
+# Initialize database
+wait_for_db()
+Base.metadata.create_all(bind=engine)
+ensure_schema_upgrades()
 seed_initial_data()
 
-# CORS for local dev and Docker overlay
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allow_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],  # More restrictive
     allow_headers=["*"],
 )
 
+# Mount routers
+app.include_router(auth.router)
+app.include_router(users.router)
+app.include_router(groups.router)
+app.include_router(patients.router)
+app.include_router(stats.router)
 
-@app.get("/health", tags=["system"])
-def health_check():
-    return {"status": "ok"}
+# Lifecycle events
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup"""
+    from .core.cache import cache
+    await cache.connect()
+    print("✅ Application démarrée - Cache Redis connecté")
 
 
-@app.post("/auth/login", response_model=schemas.AuthResponse, tags=["auth"])
-def login(credentials: schemas.LoginRequest, response: Response, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == credentials.email).first()
-    if not user or not security.verify_password(credentials.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Identifiants invalides")
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    from .core.cache import cache
+    from .core.security import cleanup_expired_tokens
+    from .database import SessionLocal
+    
+    await cache.disconnect()
+    
+    # Cleanup expired tokens
+    db = SessionLocal()
+    try:
+        cleanup_expired_tokens(db)
+    finally:
+        db.close()
+    
+    print("✅ Application arrêtée proprement")
 
-    access_token = security.create_token({"sub": user.id}, settings.access_token_ttl)
-    refresh_token = security.create_token({"sub": user.id, "type": "refresh"}, settings.refresh_token_ttl)
-    csrf_token = security.generate_csrf_token()
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        **settings.refresh_cookie_params,
-    )
-    response.set_cookie(
-        key="csrf_token",
-        value=csrf_token,
-        **settings.csrf_cookie_params,
-    )
-    _ = user.group
+
+# Root endpoint
+@app.get("/", tags=["system"])
+async def root():
     return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": user,
-        "csrf_token": csrf_token,
+        "message": "Preview DICOM Platform API",
+        "version": "0.2.0",
+        "docs": "/docs"
     }
-
-
-@app.post("/auth/refresh", response_model=schemas.AuthResponse, tags=["auth"])
-def refresh_token(
-    response: Response,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    refresh_token = request.cookies.get("refresh_token")
-    if not refresh_token:
-        raise HTTPException(status_code=401, detail="Token manquant")
-
-    csrf_cookie = request.cookies.get("csrf_token")
-    csrf_header = request.headers.get("X-CSRF-Token")
-    if csrf_cookie and csrf_header and csrf_cookie != csrf_header:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Requête interdite: CSRF token invalide",
-        )
-
-    payload = security.decode_token(refresh_token)
-    if payload.get("type") != "refresh":
-        raise HTTPException(status_code=401, detail="Token invalide")
-
-    user = db.query(models.User).get(payload.get("sub"))
-    if not user:
-        raise HTTPException(status_code=401, detail="Utilisateur introuvable")
-
-    access_token = security.create_token({"sub": user.id}, settings.access_token_ttl)
-    csrf_token = csrf_cookie or security.generate_csrf_token()
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        **settings.refresh_cookie_params,
-    )
-    response.set_cookie(
-        key="csrf_token",
-        value=csrf_token,
-        **settings.csrf_cookie_params,
-    )
-    _ = user.group
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": user,
-        "csrf_token": csrf_token,
-    }
-
-
-@app.post("/groups", response_model=schemas.GroupRead, tags=["groups"])
-def create_group(group: schemas.GroupCreate, db: Session = Depends(get_db)):
-    db_group = models.Group(**group.dict())
-    db.add(db_group)
-    db.commit()
-    db.refresh(db_group)
-    return db_group
-
-
-@app.get("/groups", response_model=List[schemas.GroupRead], tags=["groups"])
-def list_groups(db: Session = Depends(get_db)):
-    return db.query(models.Group).all()
-
-
-@app.get("/groups/{group_id}", response_model=schemas.GroupRead, tags=["groups"])
-def get_group(group_id: int, db: Session = Depends(get_db)):
-    group = db.query(models.Group).filter(models.Group.id == group_id).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-    return group
-
-
-@app.put("/groups/{group_id}", response_model=schemas.GroupRead, tags=["groups"])
-def update_group(
-    group_id: int, group_update: schemas.GroupUpdate, db: Session = Depends(get_db)
-):
-    group = db.query(models.Group).filter(models.Group.id == group_id).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-
-    for field, value in group_update.dict(exclude_unset=True).items():
-        setattr(group, field, value)
-
-    db.commit()
-    db.refresh(group)
-    return group
-
-
-@app.delete("/groups/{group_id}", status_code=204, tags=["groups"])
-def delete_group(group_id: int, db: Session = Depends(get_db)):
-    group = db.query(models.Group).filter(models.Group.id == group_id).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-
-    # Detach users from the group to allow deletion
-    db.query(models.User).filter(models.User.group_id == group.id).update(
-        {models.User.group_id: None}
-    )
-    db.delete(group)
-    db.commit()
-
-
-@app.post("/users", response_model=schemas.UserRead, tags=["users"])
-def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    hashed = security.get_password_hash(user.password)
-    db_user = models.User(
-        email=user.email,
-        full_name=user.full_name,
-        hashed_password=hashed,
-        role=user.role,
-        status=user.status,
-        expiration_date=user.expiration_date,
-        group_id=user.group_id,
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
-
-
-@app.get("/users", response_model=List[schemas.UserRead], tags=["users"])
-def list_users(db: Session = Depends(get_db)):
-    return db.query(models.User).all()
-
-
-@app.get("/users/{user_id}", response_model=schemas.UserRead, tags=["users"])
-def get_user(user_id: int, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
-
-
-@app.put("/users/{user_id}", response_model=schemas.UserRead, tags=["users"])
-def update_user(
-    user_id: int, user_update: schemas.UserUpdate, db: Session = Depends(get_db)
-):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    update_data = user_update.dict(exclude_unset=True)
-    if "password" in update_data:
-        update_data["hashed_password"] = security.get_password_hash(
-            update_data.pop("password")
-        )
-
-    for field, value in update_data.items():
-        setattr(user, field, value)
-
-    db.commit()
-    db.refresh(user)
-    return user
-
-
-@app.delete("/users/{user_id}", status_code=204, tags=["users"])
-def delete_user(user_id: int, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    db.delete(user)
-    db.commit()
-
-
-@app.post("/patients", response_model=schemas.PatientRead, tags=["patients"])
-def create_patient(patient: schemas.PatientCreate, db: Session = Depends(get_db)):
-    existing = db.query(models.Patient).filter(models.Patient.external_id == patient.external_id).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="Patient already exists")
-
-    db_patient = models.Patient(**patient.dict())
-    db.add(db_patient)
-    db.commit()
-    db.refresh(db_patient)
-    return db_patient
-
-
-def _normalize_patient_payload(raw_payload: dict) -> schemas.PatientCreate:
-    """Accept both snake_case and camelCase payloads and ensure required fields are present."""
-
-    payload = raw_payload.copy()
-
-    # Accept exported fields (camelCase) as well as API snake_case
-    if "external_id" not in payload and "id" in payload:
-        payload["external_id"] = payload.get("id")
-    if "first_name" not in payload and "firstName" in payload:
-        payload["first_name"] = payload.get("firstName")
-    if "last_name" not in payload and "lastName" in payload:
-        payload["last_name"] = payload.get("lastName")
-    if "date_of_birth" not in payload and "dob" in payload:
-        payload["date_of_birth"] = payload.get("dob")
-    if "last_visit" not in payload and "lastVisit" in payload:
-        payload["last_visit"] = payload.get("lastVisit")
-    if "dicom_study_uid" not in payload and "dicomStudyUid" in payload:
-        payload["dicom_study_uid"] = payload.get("dicomStudyUid")
-    if "orthanc_patient_id" not in payload and "orthancPatientId" in payload:
-        payload["orthanc_patient_id"] = payload.get("orthancPatientId")
-
-    missing = [
-        field
-        for field in ("external_id", "first_name", "last_name")
-        if not payload.get(field)
-    ]
-    if missing:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Champs manquants pour le patient: {', '.join(missing)}",
-        )
-
-    try:
-        return schemas.PatientCreate(**payload)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-
-def _iter_file(upload: UploadFile, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
-    while True:
-        chunk = upload.file.read(chunk_size)
-        if not chunk:
-            break
-        yield chunk
-
-
-@app.post("/patients/import", response_model=schemas.PatientRead, tags=["patients"])
-def import_patient(
-    patient: str = Form(...),
-    dicom_files: List[UploadFile] = File(default_factory=list),
-    db: Session = Depends(get_db),
-    orthanc: OrthancClient = Depends(get_orthanc_client),
-):
-    """Import a patient record and forward attached DICOM files to Orthanc."""
-
-    try:
-        payload = json.loads(patient)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid patient payload")
-
-    patient_in = _normalize_patient_payload(payload)
-
-    db_patient = (
-        db.query(models.Patient)
-        .filter(models.Patient.external_id == patient_in.external_id)
-        .first()
-    )
-
-    if db_patient:
-        for field, value in patient_in.dict().items():
-            setattr(db_patient, field, value)
-    else:
-        db_patient = models.Patient(**patient_in.dict())
-        db.add(db_patient)
-
-    db.commit()
-    db.refresh(db_patient)
-
-    orthanc_patient_id = db_patient.orthanc_patient_id
-    dicom_study_uid = db_patient.dicom_study_uid
-
-    for dicom_file in dicom_files:
-        orthanc_response = orthanc.upload_stream(_iter_file(dicom_file))
-        orthanc_patient_id = orthanc_response.get("ParentPatient") or orthanc_patient_id
-        dicom_study_uid = (
-            dicom_study_uid
-            or orthanc_response.get("ParentStudy")
-            or orthanc_response.get("MainDicomTags", {}).get("StudyInstanceUID")
-        )
-
-    db_patient.orthanc_patient_id = orthanc_patient_id
-    db_patient.dicom_study_uid = dicom_study_uid
-    db.commit()
-    db.refresh(db_patient)
-
-    return db_patient
-
-
-@app.get("/patients", response_model=List[schemas.PatientRead], tags=["patients"])
-def list_patients(db: Session = Depends(get_db), orthanc: OrthancClient = Depends(get_orthanc_client)):
-    patients = db.query(models.Patient).all()
-    for patient in patients:
-        if patient.orthanc_patient_id:
-            try:
-                instance_ids = orthanc.list_instances(patient.orthanc_patient_id)
-                patient.image_count = len(instance_ids)
-                patient.has_images = patient.image_count > 0
-            except HTTPException:
-                patient.has_images = True
-                patient.image_count = 0
-        else:
-            patient.has_images = False
-            patient.image_count = 0
-    return patients
-
-
-@app.get("/patients/{patient_id}", response_model=schemas.PatientRead, tags=["patients"])
-def get_patient(
-    patient_id: int,
-    db: Session = Depends(get_db),
-    orthanc: OrthancClient = Depends(get_orthanc_client),
-):
-    patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
-    if patient.orthanc_patient_id:
-        try:
-            instance_ids = orthanc.list_instances(patient.orthanc_patient_id)
-            patient.image_count = len(instance_ids)
-            patient.has_images = patient.image_count > 0
-        except HTTPException:
-            patient.has_images = True
-            patient.image_count = 0
-    else:
-        patient.has_images = False
-        patient.image_count = 0
-    return patient
-
-
-@app.delete("/patients/{patient_id}", status_code=204, tags=["patients"])
-def delete_patient(
-    patient_id: int,
-    db: Session = Depends(get_db),
-    orthanc: OrthancClient = Depends(get_orthanc_client),
-):
-    patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
-    if patient.orthanc_patient_id:
-        try:
-            orthanc.delete_patient(patient.orthanc_patient_id)
-        except HTTPException:
-            pass
-
-    db.delete(patient)
-    db.commit()
-
-
-@app.get(
-    "/patients/{patient_id}/images",
-    response_model=List[schemas.DicomImage],
-    tags=["patients"],
-)
-def list_patient_images(
-    patient_id: int,
-    db: Session = Depends(get_db),
-    orthanc: OrthancClient = Depends(get_orthanc_client),
-):
-    patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
-    if not patient.orthanc_patient_id:
-        return []
-
-    try:
-        instance_ids = orthanc.list_instances(patient.orthanc_patient_id)
-    except HTTPException:
-        return []
-
-    images: List[schemas.DicomImage] = []
-    for instance_id in instance_ids:
-        try:
-            meta = orthanc.instance_metadata(instance_id)
-            tags = meta.get("MainDicomTags", {})
-        except HTTPException:
-            continue
-
-        images.append(
-            schemas.DicomImage(
-                id=instance_id,
-                url=f"/api/dicom/instances/{instance_id}",
-                description=tags.get("SeriesDescription")
-                or tags.get("StudyDescription")
-                or "Image DICOM",
-                date=tags.get("InstanceCreationDate")
-                or tags.get("StudyDate"),
-            )
-        )
-
-    return images
-
-
-@app.get("/patients/{patient_id}/export")
-def export_patient(
-    patient_id: int,
-    db: Session = Depends(get_db),
-    orthanc: OrthancClient = Depends(get_orthanc_client),
-):
-    patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
-    if not patient.orthanc_patient_id:
-        raise HTTPException(status_code=404, detail="Aucun DICOM disponible pour ce patient")
-
-    try:
-        instance_ids = orthanc.list_instances(patient.orthanc_patient_id)
-    except HTTPException:
-        raise HTTPException(status_code=502, detail="Impossible de récupérer les instances DICOM")
-
-    folder_name = f"Patient-{patient.external_id or patient.id}"
-    export_buffer = io.BytesIO()
-
-    with zipfile.ZipFile(export_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-        json_payload = {
-            "id": patient.external_id or patient.id,
-            "firstName": patient.first_name,
-            "lastName": patient.last_name,
-            "dob": patient.date_of_birth,
-            "condition": patient.condition,
-            "lastVisit": patient.last_visit,
-            "dicomStudyUid": patient.dicom_study_uid,
-            "orthancPatientId": patient.orthanc_patient_id,
-        }
-        zip_file.writestr(f"{folder_name}/{folder_name}.json", json.dumps(json_payload, indent=2))
-
-        for idx, instance_id in enumerate(instance_ids, start=1):
-            try:
-                tags = orthanc.instance_metadata(instance_id).get("MainDicomTags", {})
-                dicom_content = orthanc.stream_instance(instance_id)
-            except HTTPException:
-                continue
-
-            series = tags.get("SeriesNumber") or 1
-            instance_number = tags.get("InstanceNumber") or idx
-            file_name = f"{series}-{int(instance_number):02d}.dcm"
-            zip_file.writestr(f"{folder_name}/{file_name}", dicom_content)
-
-    export_buffer.seek(0)
-    headers = {
-        "Content-Disposition": f"attachment; filename={folder_name}.zip"
-    }
-    return Response(content=export_buffer.getvalue(), media_type="application/zip", headers=headers)
-
-
-@app.get("/dicom/instances/{instance_id}")
-def proxy_dicom_file(instance_id: str, orthanc: OrthancClient = Depends(get_orthanc_client)):
-    content = orthanc.stream_instance(instance_id)
-    return Response(content=content, media_type="application/dicom")
